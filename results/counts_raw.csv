@@ -1,0 +1,9 @@
+CodeClass,Name,sample_01,sample_02,sample_03,sample_04
+Positive,POS_A,120,118,130,135
+Positive,POS_B,240,245,260,255
+Negative,NEG_A,5,6,7,6
+Negative,NEG_B,4,5,5,6
+Housekeeping,ACTB,800,790,820,830
+Endogenous,GENE1,40,44,95,100
+Endogenous,GENE2,300,310,280,275
+Endogenous,GENE3,12,14,30,34

@@ -1,0 +1,15 @@
+README.md
+pyproject.toml
+src/easy_ncounter/__init__.py
+src/easy_ncounter/cli.py
+src/easy_ncounter/config.py
+src/easy_ncounter/io.py
+src/easy_ncounter/qc.py
+src/easy_ncounter/runners.py
+src/easy_ncounter.egg-info/PKG-INFO
+src/easy_ncounter.egg-info/SOURCES.txt
+src/easy_ncounter.egg-info/dependency_links.txt
+src/easy_ncounter.egg-info/entry_points.txt
+src/easy_ncounter.egg-info/requires.txt
+src/easy_ncounter.egg-info/top_level.txt
+tests/test_io.py

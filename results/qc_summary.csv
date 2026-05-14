@@ -1,0 +1,5 @@
+sample_id,library_size,detected_probes,positive_control_sum,negative_control_mean
+sample_01,1521,8,360,4.5
+sample_02,1532,8,363,5.5
+sample_03,1627,8,390,6.0
+sample_04,1641,8,390,6.0
