@@ -1,0 +1,29 @@
+project:
+  name: example_ncounter_project
+
+inputs:
+  counts: data/raw/counts.csv
+  metadata: data/metadata/samples.csv
+  probe_annotation: data/reference/probes.csv
+
+outputs:
+  results_dir: results
+  reports_dir: reports
+
+analysis:
+  group_column: condition
+  reference_group: control
+  case_group: treated
+  min_count: 10
+  min_samples: 2
+  top_variable_genes: 50
+
+normalization:
+  method: nanostringnorm
+  positive_control_norm: geometric_mean
+  housekeeping_norm: geometric_mean
+  background_correction: mean_2sd
+  housekeeping_genes: []
+
+r:
+  executable: Rscript

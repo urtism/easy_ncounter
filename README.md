@@ -1,0 +1,101 @@
+# easy-ncounter
+
+Pipeline riproducibile per analisi di dati NanoString nCounter, con orchestrazione in
+Python e analisi statistica in R.
+
+## Obiettivo
+
+Il progetto separa le responsabilita:
+
+- Python: CLI, validazione input, lettura RCC/CSV, organizzazione cartelle,
+  chiamata degli script R e report di stato.
+- R: normalizzazione, controllo qualita statistico, PCA/clustering, analisi
+  differenziale e figure.
+
+## Struttura
+
+```text
+.
+├── config/pipeline.yaml        # parametri della pipeline
+├── data/raw/                   # file RCC o matrice counts grezza
+├── data/metadata/              # sample sheet
+├── data/reference/             # annotazioni probe/panel
+├── r/                          # funzioni R riusabili
+├── scripts/                    # entrypoint R chiamati dalla CLI
+├── src/easy_ncounter/          # pacchetto Python
+├── tests/                      # test Python
+├── results/                    # output tabellari
+└── reports/                    # figure e report
+```
+
+## Installazione
+
+Python:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+R:
+
+```r
+source("scripts/install_r_deps.R")
+```
+
+Lo script installa i pacchetti mancanti in `r-lib/` dentro al progetto, senza
+richiedere privilegi di amministratore. Per usare un'altra posizione:
+
+```bash
+NC_R_LIB=/path/to/r-library Rscript scripts/install_r_deps.R
+```
+
+`NanoStringNorm` e `limma` sono opzionali ma raccomandati. Senza
+`NanoStringNorm`, la normalizzazione usa un fallback per library size.
+
+## Input attesi
+
+1. Counts NanoString in una delle forme seguenti:
+   - una directory di file `.RCC`;
+   - una matrice CSV/TSV con prima colonna `CodeClass` opzionale, seconda
+     colonna `Name`, e una colonna per campione;
+   - una matrice con righe=probe e colonne=campioni.
+2. Metadata campioni in CSV/TSV con almeno:
+   - `sample_id`
+   - la variabile di gruppo indicata in `config/pipeline.yaml`, per esempio
+     `condition`.
+
+## Esecuzione
+
+Modifica `config/pipeline.yaml`, poi:
+
+```bash
+easy-ncounter run --config config/pipeline.yaml
+```
+
+Step singoli:
+
+```bash
+easy-ncounter prepare --config config/pipeline.yaml
+easy-ncounter normalize --config config/pipeline.yaml
+easy-ncounter differential --config config/pipeline.yaml
+easy-ncounter report --config config/pipeline.yaml
+```
+
+## Output principali
+
+- `results/counts_raw.csv`: matrice grezza armonizzata.
+- `results/qc_summary.csv`: metriche QC per campione.
+- `results/counts_normalized.csv`: matrice normalizzata.
+- `results/differential_expression.csv`: risultati limma.
+- `reports/qc_library_size.png`: dimensione libreria per campione.
+- `reports/pca.png`: PCA sui dati normalizzati.
+- `reports/heatmap_top_variable.png`: heatmap dei geni piu variabili.
+
+## Filosofia tecnica
+
+Python e usato dove serve robustezza operativa: CLI, path, validazione,
+subprocess, formato dei file. R e usato dove conviene stare vicino
+all'ecosistema bioinformatico: normalizzazione NanoString, modelli lineari,
+plot statistici e tabelle differenziali.
