@@ -9,36 +9,33 @@ Requires-Dist: pyyaml>=6.0
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0; extra == "dev"
 Requires-Dist: ruff>=0.4; extra == "dev"
+Provides-Extra: ui
+Requires-Dist: plotly<6,>=5.22; extra == "ui"
+Requires-Dist: streamlit<1.36,>=1.35; extra == "ui"
 
 # easy-ncounter
 
-Pipeline riproducibile per analisi di dati NanoString nCounter, con orchestrazione in
-Python e analisi statistica in R.
+Pipeline riproducibile per analisi di dati NanoString nCounter, con
+orchestrazione in Python, normalizzazione/statistica in R e interfaccia browser
+locale.
 
-## Obiettivo
+## Cosa Fa
 
-Il progetto separa le responsabilita:
+`easy-ncounter` gestisce un workflow completo per gene expression NanoString:
 
-- Python: CLI, validazione input, lettura RCC/CSV, organizzazione cartelle,
-  chiamata degli script R e report di stato.
-- R: normalizzazione, controllo qualita statistico, PCA/clustering, analisi
-  differenziale e figure.
+1. importa file `.RCC`, samplesheet o matrici counts;
+2. armonizza campioni, metadata e annotazioni probe;
+3. calcola QC tecnico campione per campione;
+4. stima background da controlli negativi;
+5. produce counts background-corrected;
+6. filtra geni endogenous a bassa espressione;
+7. normalizza i counts;
+8. esegue confronti statistici tra gruppi con `limma`;
+9. genera figure e tabelle esplorabili dalla GUI.
 
-## Struttura
-
-```text
-.
-├── config/pipeline.yaml        # parametri della pipeline
-├── data/raw/                   # file RCC o matrice counts grezza
-├── data/metadata/              # sample sheet
-├── data/reference/             # annotazioni probe/panel
-├── r/                          # funzioni R riusabili
-├── scripts/                    # entrypoint R chiamati dalla CLI
-├── src/easy_ncounter/          # pacchetto Python
-├── tests/                      # test Python
-├── results/                    # output tabellari
-└── reports/                    # figure e report
-```
+Il progetto non sostituisce ancora `nf-core/nanostring` o NACHO, ma si sta
+allineando a quel tipo di workflow: input tracciabili, QC esplicito,
+normalizzazione controllata, filtraggio documentato e output intermedi salvati.
 
 ## Installazione
 
@@ -47,34 +44,322 @@ Python:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,ui]"
 ```
 
 R:
 
-```r
-install.packages(c("optparse", "yaml", "readr", "dplyr", "tidyr", "ggplot2",
-                   "pheatmap", "limma", "NanoStringNorm"))
+```bash
+Rscript scripts/install_r_deps.R
 ```
 
-`NanoStringNorm` e `limma` possono essere installati anche tramite
-Bioconductor/CRAN secondo la configurazione del tuo ambiente R.
+Lo script installa i pacchetti R mancanti in `r-lib/` dentro al progetto.
+`NanoStringNorm` e `limma` sono raccomandati. Se `NanoStringNorm` non e
+disponibile, la normalizzazione usa un fallback basato su library size.
 
-## Input attesi
+## Input Supportati
 
-1. Counts NanoString in una delle forme seguenti:
-   - una directory di file `.RCC`;
-   - una matrice CSV/TSV con prima colonna `CodeClass` opzionale, seconda
-     colonna `Name`, e una colonna per campione;
-   - una matrice con righe=probe e colonne=campioni.
-2. Metadata campioni in CSV/TSV con almeno:
-   - `sample_id`
-   - la variabile di gruppo indicata in `config/pipeline.yaml`, per esempio
-     `condition`.
+### Modalita RCC + RLF
 
-## Esecuzione
+La modalita principale nella GUI:
 
-Modifica `config/pipeline.yaml`, poi:
+- uno o piu file `.RCC`;
+- file `.RLF` opzionale;
+- metadata creati/modificati dalla GUI.
+
+La GUI genera automaticamente un samplesheet e copia gli RCC in:
+
+```text
+ui_runs/<nome_analisi>/input/rcc/
+```
+
+### Modalita Samplesheet
+
+Samplesheet stile nf-core con almeno:
+
+```csv
+RCC_FILE,RCC_FILE_NAME,SAMPLE_ID,condition
+rcc/sample1.RCC,sample1.RCC,sample1,control
+rcc/sample2.RCC,sample2.RCC,sample2,treated
+```
+
+`RCC_FILE` e `SAMPLE_ID` sono obbligatori. `RCC_FILE_NAME` e le colonne metadata
+sono opzionali.
+
+### Modalita Counts + Metadata
+
+Counts CSV/TSV con:
+
+- `CodeClass`, opzionale;
+- `Name`;
+- una colonna per campione.
+
+Metadata CSV/TSV con:
+
+- `sample_id`;
+- almeno una colonna sperimentale, per esempio `condition`, `TIME`,
+  `TREATMENT` o `BATCH`.
+
+## Interfaccia Browser Locale
+
+Avvio:
+
+```bash
+easy-ncounter-ui
+```
+
+Poi apri:
+
+```text
+http://localhost:8501
+```
+
+La GUI e organizzata in tre moduli.
+
+### 1. Campioni E Metadata
+
+Pagina `Caricamento`:
+
+- carica `.RCC` e `.RLF`;
+- oppure carica counts+metadata;
+- oppure carica un samplesheet;
+- visualizza subito il samplesheet;
+- consente di modificare solo `SAMPLE_ID`.
+
+Pagina `Gestione metadata`:
+
+- `sample_id` e bloccato e sincronizzato con il samplesheet;
+- puoi aggiungere colonne metadata;
+- puoi eliminare colonne metadata selezionate;
+- puoi compilare gruppi sperimentali, batch, timepoint, trattamenti o altre
+  covariate.
+
+Le modifiche restano in memoria mentre navighi tra moduli. Vengono azzerate solo
+quando carichi un nuovo set di file.
+
+### 2. Processing E QC
+
+Pagina `Parametri processing/QC`:
+
+- scegli normalizzazione;
+- scegli colonna metadata usata per QC/PCA;
+- imposti soglie QC principali:
+  - library size minima rispetto alla mediana;
+  - probe endogenous rilevate rispetto alla mediana;
+  - positive controls minimi rispetto alla mediana.
+
+Sezione `Opzioni avanzate QC`:
+
+- background: `mean(negative controls) + N * sd(negative controls)`;
+- soglia controlli negativi: mediana + `N * MAD`;
+- FOV counted minimo;
+- binding density minima/massima;
+- soglie FAIL;
+- filtro geni: count minimo e numero minimo di campioni.
+
+Pagina `Valutazione QC`:
+
+- riepilogo `PASS`, `WARN`, `FAIL`;
+- campioni problematici;
+- metriche QC grafiche;
+- tabella QC completa.
+
+### 3. Analisi E Grafici
+
+Pagina `Comparazioni`:
+
+- scegli la colonna metadata da usare come gruppo;
+- scegli gruppo riferimento;
+- scegli gruppo caso;
+- esegui analisi differenziale.
+
+Pagina `Visualizzazione dati`:
+
+- risultati differenziali;
+- filtri su `adj.P.Val` e `logFC`;
+- volcano plot interattivo con tooltip sui geni;
+- click su un gene del volcano per aprire il grafico di espressione nei campioni;
+- vista compatta con volcano ed espressione affiancati;
+- profili normalizzati per gene;
+- PCA;
+- volcano plot;
+- heatmap;
+- download tabelle.
+
+## QC Tecnico
+
+La pipeline calcola QC su due livelli.
+
+### Metriche Da RCC
+
+Quando disponibili nei file RCC:
+
+- `FovCount`;
+- `FovCounted`;
+- frazione `FovCounted / FovCount`;
+- `BindingDensity`;
+- scanner/cartridge;
+- RLF dichiarato nel file.
+
+### Metriche Da Counts
+
+Per ogni campione:
+
+- `library_size`;
+- `endogenous_library_size`;
+- `detected_probes`;
+- `detected_endogenous_probes`;
+- `positive_control_sum`;
+- `positive_control_cv`;
+- `negative_control_mean`;
+- `negative_control_sd`;
+- `background_threshold`;
+- `endogenous_above_background`.
+
+### Decisione QC
+
+Ogni campione riceve:
+
+```text
+qc_status: PASS / WARN / FAIL
+qc_warnings
+qc_fail_reasons
+```
+
+Esempi di warning/fail:
+
+- `low_library_size`;
+- `very_low_library_size`;
+- `low_detected_endogenous_probes`;
+- `very_low_detected_endogenous_probes`;
+- `low_positive_controls`;
+- `high_negative_controls`;
+- `low_fov_counted_fraction`;
+- `low_binding_density`;
+- `high_binding_density`.
+
+I campioni `FAIL` vengono esclusi dai counts filtrati usati per la
+normalizzazione e l'analisi statistica.
+
+## Background, Filtraggio E Normalizzazione
+
+### Background Correction
+
+Il background viene stimato per campione dai controlli negativi:
+
+```text
+background_threshold = mean(negative controls) + N * sd(negative controls)
+```
+
+La pipeline produce:
+
+```text
+counts_background_corrected.csv
+```
+
+con:
+
+```text
+max(raw_count - background_threshold, 0)
+```
+
+### Filtraggio Geni
+
+La pipeline:
+
+- rimuove positive/negative controls dall'analisi differenziale;
+- tiene separati housekeeping e controls;
+- mantiene solo geni `Endogenous`;
+- filtra geni low-expression usando count minimo e numero minimo di campioni;
+- esclude campioni con `qc_status == FAIL`.
+
+Output:
+
+```text
+counts_filtered.csv
+gene_filter_decisions.csv
+```
+
+### Normalizzazione
+
+La normalizzazione usa come input preferenziale:
+
+```text
+counts_filtered.csv
+```
+
+Se non disponibile, usa `counts_background_corrected.csv`, poi `counts_raw.csv`.
+
+Metodi:
+
+- `NanoStringNorm`, se installato;
+- fallback `library_size`, se `NanoStringNorm` non e disponibile.
+
+Output:
+
+```text
+counts_normalized.csv
+```
+
+## Analisi Statistica
+
+L'analisi differenziale usa `limma` su:
+
+```text
+log2(counts_normalized + 1)
+```
+
+Il contrasto e:
+
+```text
+case_group - reference_group
+```
+
+Output:
+
+```text
+differential_expression.csv
+```
+
+con colonne tipiche:
+
+- `Name`;
+- `logFC`;
+- `AveExpr`;
+- `t`;
+- `P.Value`;
+- `adj.P.Val`;
+- `B`.
+
+## Output Principali
+
+In `results/`:
+
+```text
+counts_raw.csv
+metadata.csv
+probe_annotation.csv
+qc_summary.csv
+sample_qc_decisions.csv
+counts_background_corrected.csv
+counts_filtered.csv
+gene_filter_decisions.csv
+counts_normalized.csv
+differential_expression.csv
+```
+
+In `reports/`:
+
+```text
+qc_library_size.png
+pca.png
+heatmap_top_variable.png
+volcano_plot.png
+```
+
+## CLI
+
+Pipeline completa:
 
 ```bash
 easy-ncounter run --config config/pipeline.yaml
@@ -89,20 +374,38 @@ easy-ncounter differential --config config/pipeline.yaml
 easy-ncounter report --config config/pipeline.yaml
 ```
 
-## Output principali
+## Struttura Del Progetto
 
-- `results/counts_raw.csv`: matrice grezza armonizzata.
-- `results/qc_summary.csv`: metriche QC per campione.
-- `results/counts_normalized.csv`: matrice normalizzata.
-- `results/differential_expression.csv`: risultati limma.
-- `reports/qc_library_size.png`: dimensione libreria per campione.
-- `reports/pca.png`: PCA sui dati normalizzati.
-- `reports/heatmap_top_variable.png`: heatmap dei geni piu variabili.
+```text
+config/pipeline.yaml        # parametri pipeline
+data/raw/                   # RCC o counts grezzi
+data/metadata/              # metadata/samplesheet
+r/                          # funzioni R condivise
+scripts/                    # entrypoint R
+src/easy_ncounter/          # codice Python
+tests/                      # test
+results/                    # output tabellari
+reports/                    # figure
+ui_runs/                    # run create dalla GUI
+```
 
-## Filosofia tecnica
+## Limiti Attuali
 
-Python e usato dove serve robustezza operativa: CLI, path, validazione,
-subprocess, formato dei file. R e usato dove conviene stare vicino
-all'ecosistema bioinformatico: normalizzazione NanoString, modelli lineari,
-plot statistici e tabelle differenziali.
+- L'RLF viene salvato e tracciato, ma non e ancora usato pienamente per
+  classificare housekeeping o gene sets.
+- La normalizzazione NACHO non e ancora integrata direttamente.
+- MultiQC non e ancora generato.
+- L'analisi statistica supporta confronti semplici gruppo-vs-gruppo; modelli
+  complessi con paired design, batch o covariate multiple sono il passo
+  successivo.
 
+## Direzione Di Sviluppo
+
+Priorita future:
+
+1. parsing RLF completo;
+2. identificazione robusta housekeeping/control genes;
+3. integrazione NACHO;
+4. report HTML unico;
+5. gestione campioni `FAIL` con override manuale in GUI;
+6. modelli statistici con covariate multiple e disegni paired/repeated.

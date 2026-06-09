@@ -18,9 +18,14 @@ dev = [
   "pytest>=8.0",
   "ruff>=0.4",
 ]
+ui = [
+  "plotly>=5.22,<6",
+  "streamlit>=1.35,<1.36",
+]
 
 [project.scripts]
 easy-ncounter = "easy_ncounter.cli:main"
+easy-ncounter-ui = "easy_ncounter.ui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -31,4 +36,3 @@ target-version = "py310"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-

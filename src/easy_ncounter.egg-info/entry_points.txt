@@ -1,2 +1,3 @@
 [console_scripts]
 easy-ncounter = easy_ncounter.cli:main
+easy-ncounter-ui = easy_ncounter.ui:main

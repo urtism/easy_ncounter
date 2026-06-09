@@ -8,6 +8,7 @@ results/*
 !results/.gitkeep
 reports/*
 !reports/.gitkeep
+ui_runs/
 
 *.Rhistory
 *.RData

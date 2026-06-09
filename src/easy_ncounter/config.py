@@ -29,6 +29,11 @@ class PipelineConfig:
         return Path(self.raw["inputs"]["metadata"])
 
     @property
+    def samplesheet_path(self) -> Path | None:
+        value = self.raw["inputs"].get("samplesheet")
+        return Path(value) if value else None
+
+    @property
     def rscript(self) -> str:
         return str(self.raw.get("r", {}).get("executable", "Rscript"))
 
@@ -39,16 +44,20 @@ def load_config(path: str | Path) -> PipelineConfig:
         raw = yaml.safe_load(handle) or {}
 
     required = [
-        ("inputs", "counts"),
-        ("inputs", "metadata"),
         ("outputs", "results_dir"),
         ("outputs", "reports_dir"),
         ("analysis", "group_column"),
     ]
     missing = [f"{section}.{key}" for section, key in required if key not in raw.get(section, {})]
+
+    inputs = raw.get("inputs", {})
+    has_samplesheet = bool(inputs.get("samplesheet"))
+    has_matrix_inputs = bool(inputs.get("counts") and inputs.get("metadata"))
+    if not has_samplesheet and not has_matrix_inputs:
+        missing.append("inputs.samplesheet or inputs.counts + inputs.metadata")
+
     if missing:
         joined = ", ".join(missing)
         raise ValueError(f"Missing required config keys: {joined}")
 
     return PipelineConfig(path=config_path, raw=raw)
-

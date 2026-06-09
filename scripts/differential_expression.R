@@ -17,7 +17,11 @@ opt <- parse_cli_args()
 cfg <- read_pipeline_config(opt$config)
 
 results_dir <- cfg$outputs$results_dir
-metadata_path <- cfg$inputs$metadata
+metadata_path <- if (file.exists(file.path(results_dir, "metadata.csv"))) {
+  file.path(results_dir, "metadata.csv")
+} else {
+  cfg$inputs$metadata
+}
 group_col <- cfg$analysis$group_column
 reference_group <- cfg$analysis$reference_group
 case_group <- cfg$analysis$case_group
@@ -26,14 +30,23 @@ metadata <- readr::read_csv(metadata_path, show_col_types = FALSE)
 count_data <- read_counts_matrix(file.path(results_dir, "counts_normalized.csv"))
 matrix <- count_data$matrix
 
-matrix <- filter_low_counts(
-  matrix,
-  min_count = cfg$analysis$min_count %||% 10,
-  min_samples = cfg$analysis$min_samples %||% 2
-)
+skip_low_count_filter <- isTRUE(cfg$analysis$skip_low_count_filter)
+if (!skip_low_count_filter) {
+  matrix <- filter_low_counts(
+    matrix,
+    min_count = cfg$analysis$min_count %||% 10,
+    min_samples = cfg$analysis$min_samples %||% 2
+  )
+} else {
+  message("Skipping low-count gene filter for final processed counts.")
+}
 
 sample_order <- intersect(metadata$sample_id, colnames(matrix))
 metadata <- metadata %>% dplyr::filter(sample_id %in% sample_order)
+matrix <- matrix[, metadata$sample_id, drop = FALSE]
+
+metadata <- metadata %>%
+  dplyr::filter(.data[[group_col]] %in% c(reference_group, case_group))
 matrix <- matrix[, metadata$sample_id, drop = FALSE]
 
 if (!requireNamespace("limma", quietly = TRUE)) {
@@ -41,6 +54,12 @@ if (!requireNamespace("limma", quietly = TRUE)) {
 }
 
 metadata[[group_col]] <- factor(metadata[[group_col]], levels = c(reference_group, case_group))
+if (nrow(metadata) != ncol(matrix)) {
+  stop("Sample metadata and count matrix are not aligned after filtering groups.")
+}
+if (length(unique(metadata[[group_col]])) < 2) {
+  stop("Differential expression requires at least two groups after filtering metadata.")
+}
 design <- model.matrix(stats::as.formula(paste0("~ 0 + ", group_col)), data = metadata)
 colnames(design) <- levels(metadata[[group_col]])
 fit <- limma::lmFit(log2(matrix + 1), design)

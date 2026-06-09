@@ -1,5 +1,5 @@
-sample_id,library_size,detected_probes,positive_control_sum,negative_control_mean
-sample_01,1521,8,360,4.5
-sample_02,1532,8,363,5.5
-sample_03,1627,8,390,6.0
-sample_04,1641,8,390,6.0
+sample_id,library_size,endogenous_library_size,detected_probes,detected_endogenous_probes,positive_control_sum,positive_control_cv,negative_control_mean,negative_control_sd,background_threshold,endogenous_above_background,qc_warnings,qc_fail_reasons,qc_status
+sample_01,1521,352,8,3,360,0.3333333333333333,4.5,0.5,5.5,3,,,PASS
+sample_02,1532,368,8,3,363,0.349862258953168,5.5,0.5,6.5,3,,,PASS
+sample_03,1627,405,8,3,390,0.3333333333333333,6.0,1.0,8.0,3,,,PASS
+sample_04,1641,409,8,3,390,0.3076923076923077,6.0,0.0,6.0,3,,,PASS
