@@ -45,6 +45,7 @@ def prepare(config) -> None:
         counts = read_counts(config.counts_input)
         metadata = _read_metadata(config.metadata_path)
         rcc_metrics = None
+    metadata = _add_analysis_group_column(metadata, config.raw.get("analysis", {}))
 
     sample_cols = [col for col in counts.columns if col not in {"CodeClass", "Name"}]
     missing_metadata = sorted(set(sample_cols) - set(metadata["sample_id"]))
@@ -83,6 +84,40 @@ def prepare(config) -> None:
 
 def _read_metadata(path: Path):
     return read_delimited_table(path)
+
+
+def _add_analysis_group_column(metadata, analysis: dict):
+    group_columns = analysis.get("group_columns") or [analysis.get("group_column")]
+    if isinstance(group_columns, str):
+        group_columns = [group_columns]
+    group_columns = [str(column) for column in group_columns if column]
+    if len(group_columns) <= 1:
+        return metadata
+
+    missing_columns = [column for column in group_columns if column not in metadata.columns]
+    if missing_columns:
+        joined = ", ".join(missing_columns)
+        raise ValueError(f"Missing metadata columns for analysis groups: {joined}")
+
+    group_column = analysis.get("group_column") or _composite_group_column_name(group_columns)
+    output = metadata.copy()
+    output[group_column] = output.apply(lambda row: _composite_group_label(row, group_columns), axis=1)
+    return output
+
+
+def _composite_group_column_name(group_columns: list[str]) -> str:
+    safe_parts = ["".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in column) for column in group_columns]
+    return "__group__" + "__".join(safe_parts)
+
+
+def _composite_group_label(row, group_columns: list[str]) -> str | None:
+    parts = []
+    for column in group_columns:
+        value = row.get(column)
+        if value is None or value != value or str(value).strip() == "":
+            return None
+        parts.append(f"{column}={value}")
+    return " | ".join(parts)
 
 
 if __name__ == "__main__":

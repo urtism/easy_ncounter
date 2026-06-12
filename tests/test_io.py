@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from easy_ncounter.cli import _add_analysis_group_column
 from easy_ncounter.io import (
     metadata_from_samplesheet,
     read_count_table,
@@ -8,6 +9,7 @@ from easy_ncounter.io import (
     read_rcc_metrics,
 )
 from easy_ncounter.qc import background_correct_counts, compute_qc_summary, filter_endogenous_counts
+from easy_ncounter.ui import _valid_contrasts
 
 
 def test_read_count_table_adds_code_class(tmp_path: Path) -> None:
@@ -18,6 +20,51 @@ def test_read_count_table_adds_code_class(tmp_path: Path) -> None:
 
     assert list(table.columns) == ["CodeClass", "Name", "sample_01", "sample_02"]
     assert table.loc[0, "CodeClass"] == "Endogenous"
+
+
+def test_add_analysis_group_column_combines_multiple_metadata_features() -> None:
+    import pandas as pd
+
+    metadata = pd.DataFrame(
+        {
+            "sample_id": ["sample_01", "sample_02"],
+            "DISEASE": ["control", "disease"],
+            "TIME": ["T0", "T1"],
+        }
+    )
+
+    output = _add_analysis_group_column(
+        metadata,
+        {
+            "group_column": "__group__DISEASE__TIME",
+            "group_columns": ["DISEASE", "TIME"],
+        },
+    )
+
+    assert output["__group__DISEASE__TIME"].tolist() == [
+        "DISEASE=control | TIME=T0",
+        "DISEASE=disease | TIME=T1",
+    ]
+
+
+def test_valid_contrasts_filters_invalid_and_duplicates() -> None:
+    contrasts = _valid_contrasts(
+        [
+            {"comparison_id": "treated vs control", "reference_group": "control", "case_group": "treated"},
+            {"comparison_id": "treated vs control", "reference_group": "control", "case_group": "treated"},
+            {"comparison_id": "bad", "reference_group": "control", "case_group": "control"},
+            {"comparison_id": "missing", "reference_group": "control", "case_group": "other"},
+        ],
+        ["control", "treated"],
+    )
+
+    assert contrasts == [
+        {
+            "comparison_id": "treated_vs_control",
+            "reference_group": "control",
+            "case_group": "treated",
+        }
+    ]
 
 
 def test_read_counts_from_nf_core_style_samplesheet(tmp_path: Path) -> None:

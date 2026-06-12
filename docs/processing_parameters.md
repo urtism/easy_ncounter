@@ -291,9 +291,20 @@ Why it exists:
 
 ## Statistical Analysis Parameters
 
-### Group Column
+### Group Columns
 
-Defines which metadata column is used for differential comparison.
+Defines which metadata column, or combination of metadata columns, is used for
+differential comparison.
+
+In the UI, selecting multiple columns creates combined subgroups. For example,
+selecting `DISEASE` and `TIME` creates labels such as:
+
+```text
+DISEASE=control | TIME=T0
+DISEASE=control | TIME=T1
+DISEASE=disease | TIME=T0
+DISEASE=disease | TIME=T1
+```
 
 Effect on results:
 
@@ -304,26 +315,45 @@ Recommended choice:
 
 - use the main biological variable, such as `condition`, `TREATMENT`, or
   `TIME`;
+- select multiple variables when the comparison should be made inside combined
+  subgroups, such as `DISEASE + TIME`;
 - avoid technical columns such as batch unless the goal is a technical
   comparison.
 
-### Reference Group and Case Group
+### Reference Group, Case Group, and Contrasts
 
-The contrast is:
+The basic contrast is:
 
 ```text
 case_group - reference_group
+```
+
+For multiple comparisons, the pipeline stores a list of contrasts:
+
+```yaml
+contrasts:
+  - comparison_id: disease_T0_vs_control_T0
+    reference_group: DISEASE=control | TIME=T0
+    case_group: DISEASE=disease | TIME=T0
+  - comparison_id: disease_T1_vs_control_T1
+    reference_group: DISEASE=control | TIME=T1
+    case_group: DISEASE=disease | TIME=T1
 ```
 
 Effect on results:
 
 - `logFC > 0` means higher expression in the case group;
 - `logFC < 0` means higher expression in the reference group.
+- each contrast writes its own differential-expression table;
+- `comparison_summary.csv` summarizes sample sizes and significant genes across
+  all contrasts.
 
 Recommended choice:
 
 - use control, baseline, untreated, or time zero as the reference;
 - use treatment, disease, or the condition under test as the case.
+- when several subgroups exist, compare like-with-like where possible, such as
+  disease versus control within each timepoint.
 
 ### Analysis Min Count and Min Samples
 

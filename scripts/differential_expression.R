@@ -23,10 +23,17 @@ metadata_path <- if (file.exists(file.path(results_dir, "metadata.csv"))) {
   cfg$inputs$metadata
 }
 group_col <- cfg$analysis$group_column
-reference_group <- cfg$analysis$reference_group
-case_group <- cfg$analysis$case_group
+configured_contrasts <- cfg$analysis$contrasts
+if (is.null(configured_contrasts) || length(configured_contrasts) == 0) {
+  configured_contrasts <- list(list(
+    comparison_id = paste0(cfg$analysis$case_group, "_vs_", cfg$analysis$reference_group),
+    reference_group = cfg$analysis$reference_group,
+    case_group = cfg$analysis$case_group
+  ))
+}
 
 metadata <- readr::read_csv(metadata_path, show_col_types = FALSE)
+metadata <- add_analysis_group_column(metadata, cfg)
 count_data <- read_counts_matrix(file.path(results_dir, "counts_normalized.csv"))
 matrix <- count_data$matrix
 
@@ -45,28 +52,92 @@ sample_order <- intersect(metadata$sample_id, colnames(matrix))
 metadata <- metadata %>% dplyr::filter(sample_id %in% sample_order)
 matrix <- matrix[, metadata$sample_id, drop = FALSE]
 
+contrasts <- normalize_analysis_contrasts(configured_contrasts)
+contrast_groups <- unique(c(
+  vapply(contrasts, function(item) item$reference_group, character(1)),
+  vapply(contrasts, function(item) item$case_group, character(1))
+))
+
 metadata <- metadata %>%
-  dplyr::filter(.data[[group_col]] %in% c(reference_group, case_group))
+  dplyr::filter(.data[[group_col]] %in% contrast_groups)
 matrix <- matrix[, metadata$sample_id, drop = FALSE]
 
 if (!requireNamespace("limma", quietly = TRUE)) {
   stop("Package 'limma' is required for differential expression.")
 }
 
-metadata[[group_col]] <- factor(metadata[[group_col]], levels = c(reference_group, case_group))
+metadata[[group_col]] <- factor(metadata[[group_col]], levels = contrast_groups)
 if (nrow(metadata) != ncol(matrix)) {
   stop("Sample metadata and count matrix are not aligned after filtering groups.")
 }
 if (length(unique(metadata[[group_col]])) < 2) {
   stop("Differential expression requires at least two groups after filtering metadata.")
 }
-design <- model.matrix(stats::as.formula(paste0("~ 0 + ", group_col)), data = metadata)
+design <- model.matrix(~ 0 + metadata[[group_col]])
 colnames(design) <- levels(metadata[[group_col]])
 fit <- limma::lmFit(log2(matrix + 1), design)
-contrast <- limma::makeContrasts(contrasts = paste0(case_group, "-", reference_group), levels = design)
-fit2 <- limma::eBayes(limma::contrasts.fit(fit, contrast))
-de <- limma::topTable(fit2, number = Inf, sort.by = "P") %>%
-  tibble::rownames_to_column("Name")
 
-readr::write_csv(de, file.path(results_dir, "differential_expression.csv"))
+summary_rows <- list()
+first_result <- TRUE
+for (contrast_config in contrasts) {
+  comparison_id <- sanitize_comparison_id(contrast_config$comparison_id)
+  reference_group <- contrast_config$reference_group
+  case_group <- contrast_config$case_group
+
+  if (!reference_group %in% colnames(design) || !case_group %in% colnames(design)) {
+    warning("Skipping contrast with missing groups: ", comparison_id)
+    next
+  }
+
+  contrast <- matrix(0, nrow = ncol(design), ncol = 1, dimnames = list(colnames(design), comparison_id))
+  contrast[case_group, 1] <- 1
+  contrast[reference_group, 1] <- -1
+  fit2 <- limma::eBayes(limma::contrasts.fit(fit, contrast))
+  de <- limma::topTable(fit2, number = Inf, sort.by = "P") %>%
+    tibble::rownames_to_column("Name") %>%
+    dplyr::mutate(
+      comparison_id = comparison_id,
+      reference_group = reference_group,
+      case_group = case_group,
+      .before = 1
+    )
+
+  result_file <- paste0("differential_expression__", comparison_id, ".csv")
+  readr::write_csv(de, file.path(results_dir, result_file))
+  if (first_result) {
+    readr::write_csv(de, file.path(results_dir, "differential_expression.csv"))
+    first_result <- FALSE
+  }
+
+  significant <- de %>% dplyr::filter(adj.P.Val <= 0.05)
+  reference_samples <- metadata %>%
+    dplyr::filter(.data[[group_col]] == reference_group) %>%
+    dplyr::pull(sample_id)
+  case_samples <- metadata %>%
+    dplyr::filter(.data[[group_col]] == case_group) %>%
+    dplyr::pull(sample_id)
+  summary_rows[[length(summary_rows) + 1]] <- tibble::tibble(
+    comparison_id = comparison_id,
+    reference_group = reference_group,
+    case_group = case_group,
+    n_reference = length(reference_samples),
+    n_case = length(case_samples),
+    reference_samples = paste(reference_samples, collapse = ";"),
+    case_samples = paste(case_samples, collapse = ";"),
+    n_genes = nrow(de),
+    n_significant = nrow(significant),
+    n_up = sum(significant$logFC >= 1, na.rm = TRUE),
+    n_down = sum(significant$logFC <= -1, na.rm = TRUE),
+    top_gene = if (nrow(de) > 0) de$Name[[1]] else NA_character_,
+    result_file = result_file
+  )
+  message("Wrote ", file.path(results_dir, result_file))
+}
+
+if (length(summary_rows) == 0) {
+  stop("No valid differential-expression contrast could be run.")
+}
+summary <- dplyr::bind_rows(summary_rows)
+readr::write_csv(summary, file.path(results_dir, "comparison_summary.csv"))
+message("Wrote ", file.path(results_dir, "comparison_summary.csv"))
 message("Wrote ", file.path(results_dir, "differential_expression.csv"))

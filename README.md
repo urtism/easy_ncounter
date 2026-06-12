@@ -22,6 +22,9 @@ The project is not a replacement for `nf-core/nanostring` or NACHO yet, but it
 is aligned with that style of workflow: traceable inputs, explicit QC,
 controlled normalization, documented filtering, and saved intermediate outputs.
 
+For a step-by-step explanation of the analysis workflow and why each stage is
+performed, see [docs/analysis_workflow.md](docs/analysis_workflow.md).
+
 ## Installation
 
 Python:

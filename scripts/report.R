@@ -43,6 +43,7 @@ metadata_path <- if (file.exists(file.path(results_dir, "metadata.csv"))) {
   cfg$inputs$metadata
 }
 metadata <- readr::read_csv(metadata_path, show_col_types = FALSE)
+metadata <- add_analysis_group_column(metadata, cfg)
 group_col <- cfg$analysis$group_column
 
 row_vars <- apply(matrix, 1, stats::var, na.rm = TRUE)

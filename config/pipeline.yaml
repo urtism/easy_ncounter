@@ -12,8 +12,14 @@ outputs:
 
 analysis:
   group_column: condition
+  group_columns:
+    - condition
   reference_group: control
   case_group: treated
+  contrasts:
+    - comparison_id: treated_vs_control
+      reference_group: control
+      case_group: treated
   min_count: 10
   min_samples: 2
   top_variable_genes: 50
