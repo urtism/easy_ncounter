@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 import math
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,13 @@ from easy_ncounter.runners import run_r_script
 APP_TITLE = "easy-ncounter"
 COMPOSITE_GROUP_SEPARATOR = " | "
 COMPOSITE_GROUP_PREFIX = "__group__"
+STEP_LABELS = {
+    "configured": "saved configuration",
+    "prepare": "processing/QC",
+    "normalize": "normalization",
+    "differential": "statistical comparison",
+    "report": "report and plots",
+}
 
 
 def main() -> None:
@@ -105,18 +113,29 @@ def _run_app() -> None:
                 disabled=not bool(processing_settings),
             ):
                 _materialize_current_run(run_dir, processing_settings, st.session_state.get("qc_settings", {}))
+                _record_analysis_savepoint(config_path, "normalize")
                 st.success("Final counts saved. You can now run the statistical comparison.")
             _render_generated_files(results_dir, reports_dir, key_prefix="processed")
         elif page == "Processing/QC parameters":
             processing_settings = _render_processing_settings(st.session_state["metadata_preview"])
             qc_settings = _render_qc_settings()
             st.write(f"Analysis folder: `{run_dir}`")
-            if st.button(
+            col_save, col_run = st.columns(2)
+            if col_save.button(
+                "Save analysis",
+                disabled=not bool(processing_settings),
+                key="save_processing_analysis",
+            ):
+                _materialize_current_run(run_dir, processing_settings, qc_settings)
+                _record_analysis_savepoint(config_path, "configured")
+                st.success("Analysis saved. You can reload it from Saved analyses.")
+            if col_run.button(
                 "Save input and run processing/QC",
                 type="primary",
                 disabled=not bool(processing_settings),
             ):
                 _materialize_current_run(run_dir, processing_settings, qc_settings)
+                _record_analysis_savepoint(config_path, "configured")
                 _execute_steps(config_path, ["prepare", "normalize", "report"])
 
             if config_path.exists():
@@ -140,7 +159,13 @@ def _run_app() -> None:
             settings_ready = bool(settings) and bool(settings.get("contrasts"))
             if not settings_ready:
                 st.warning("Define at least one valid contrast with two distinct groups.")
-            if st.button("Run statistical comparison", type="primary", disabled=not settings_ready):
+            col_save, col_run = st.columns(2)
+            if col_save.button("Save analysis", disabled=not settings_ready, key="save_stats_analysis"):
+                qc_settings = st.session_state.get("qc_settings", {})
+                _materialize_current_run(run_dir, settings, qc_settings)
+                _record_analysis_savepoint(config_path, _last_completed_step(config_path))
+                st.success("Analysis saved. You can reload it from Saved analyses.")
+            if col_run.button("Run statistical comparison", type="primary", disabled=not settings_ready):
                 qc_settings = st.session_state.get("qc_settings", {})
                 _materialize_current_run(run_dir, settings, qc_settings)
                 steps = ["differential", "report"]
@@ -166,19 +191,48 @@ def _render_analysis_memory(workspace: Path) -> None:
 
     saved_runs = _saved_analysis_dirs(workspace)
     with st.expander("Saved analyses", expanded=False):
+        message = st.session_state.pop("analysis_memory_message", None)
+        if message:
+            st.success(message)
+
         if not saved_runs:
             st.caption("No saved analysis found yet.")
         else:
             labels = [_saved_analysis_label(run_dir) for run_dir in saved_runs]
             selected_label = st.selectbox("Previous analysis", labels, key="saved_analysis_select")
             selected_run = saved_runs[labels.index(selected_label)]
-            col_a, col_b = st.columns([1, 1])
+            savepoint = _saved_analysis_savepoint(selected_run)
+            if savepoint:
+                st.caption(f"Savepoint: {_format_savepoint(savepoint)}")
+            confirm_delete = st.checkbox(
+                f"Confirm permanent deletion of {selected_run.name}",
+                key=f"confirm_delete_{selected_run.name}",
+            )
+            col_a, col_b, col_c = st.columns(3)
             if col_a.button("Load analysis", key="load_saved_analysis"):
                 _load_saved_analysis(selected_run)
                 st.rerun()
             if col_b.button("Start new analysis", key="start_new_analysis"):
                 _clear_current_analysis_state()
                 st.session_state["run_label"] = _default_run_label()
+                st.rerun()
+            if col_c.button(
+                "Delete analysis",
+                key="delete_saved_analysis",
+                disabled=not confirm_delete,
+            ):
+                loaded = st.session_state.get("loaded_analysis_dir")
+                deleting_current = (
+                    st.session_state.get("run_label") == selected_run.name
+                    or (loaded and Path(str(loaded)).resolve() == selected_run.resolve())
+                )
+                _delete_saved_analysis(workspace, selected_run)
+                if deleting_current:
+                    _clear_current_analysis_state()
+                    st.session_state["run_label"] = _default_run_label()
+                st.session_state["analysis_memory_message"] = (
+                    f"Analysis '{selected_run.name}' deleted."
+                )
                 st.rerun()
 
         loaded = st.session_state.get("loaded_analysis_dir")
@@ -197,17 +251,51 @@ def _saved_analysis_dirs(workspace: Path) -> list[Path]:
     return sorted(runs, key=lambda path: path.stat().st_mtime, reverse=True)
 
 
+def _delete_saved_analysis(workspace: Path, run_dir: Path) -> None:
+    workspace_path = workspace.resolve()
+    run_path = run_dir.resolve()
+    if run_dir.is_symlink() or run_path.parent != workspace_path:
+        raise ValueError("Saved analysis must be a direct folder inside the UI workspace.")
+    if not run_path.is_dir():
+        raise FileNotFoundError(f"Saved analysis not found: {run_dir}")
+    shutil.rmtree(run_path)
+
+
 def _saved_analysis_label(run_dir: Path) -> str:
-    markers = []
-    if (run_dir / "results" / "differential_expression.csv").exists():
-        markers.append("DE")
-    elif (run_dir / "results" / "counts_normalized.csv").exists():
-        markers.append("normalized")
-    elif (run_dir / "results" / "metadata.csv").exists():
-        markers.append("metadata")
-    status = ", ".join(markers) if markers else "configured"
+    savepoint = _saved_analysis_savepoint(run_dir)
+    if savepoint:
+        status = _savepoint_step_label(savepoint)
+    else:
+        markers = []
+        if (run_dir / "results" / "differential_expression.csv").exists():
+            markers.append("DE")
+        elif (run_dir / "results" / "counts_normalized.csv").exists():
+            markers.append("normalized")
+        elif (run_dir / "results" / "metadata.csv").exists():
+            markers.append("metadata")
+        status = ", ".join(markers) if markers else "configured"
     modified = datetime.fromtimestamp(run_dir.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
     return f"{run_dir.name} - {status} - {modified}"
+
+
+def _saved_analysis_savepoint(run_dir: Path) -> dict[str, object]:
+    config = _read_saved_config(run_dir)
+    ui_state = config.get("ui", {}) if isinstance(config, dict) else {}
+    savepoint = ui_state.get("savepoint", {}) if isinstance(ui_state, dict) else {}
+    return savepoint if isinstance(savepoint, dict) else {}
+
+
+def _savepoint_step_label(savepoint: dict[str, object]) -> str:
+    step = str(savepoint.get("last_completed_step") or "configured")
+    return STEP_LABELS.get(step, step)
+
+
+def _format_savepoint(savepoint: dict[str, object]) -> str:
+    label = _savepoint_step_label(savepoint)
+    completed_at = savepoint.get("last_completed_at")
+    if completed_at:
+        return f"{label} ({completed_at})"
+    return label
 
 
 def _clear_current_analysis_state() -> None:
@@ -250,6 +338,47 @@ def _read_saved_config(run_dir: Path) -> dict[str, object]:
         return {}
     with config_path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle) or {}
+
+
+def _write_saved_config(config_path: Path, config: dict[str, object]) -> None:
+    with config_path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(config, handle, sort_keys=False)
+
+
+def _record_analysis_savepoint(config_path: Path, step: str) -> None:
+    config = _read_saved_config(config_path.parent)
+    if not config:
+        return
+
+    ui_state = config.setdefault("ui", {})
+    if not isinstance(ui_state, dict):
+        ui_state = {}
+        config["ui"] = ui_state
+
+    savepoint = ui_state.setdefault("savepoint", {})
+    if not isinstance(savepoint, dict):
+        savepoint = {}
+        ui_state["savepoint"] = savepoint
+
+    completed_steps = savepoint.get("completed_steps", [])
+    if not isinstance(completed_steps, list):
+        completed_steps = []
+    if step != "configured" and step not in completed_steps:
+        completed_steps.append(step)
+
+    savepoint["last_completed_step"] = step
+    savepoint["last_completed_at"] = datetime.now().isoformat(timespec="seconds")
+    savepoint["completed_steps"] = completed_steps
+    _write_saved_config(config_path, config)
+
+
+def _last_completed_step(config_path: Path) -> str:
+    config = _read_saved_config(config_path.parent)
+    ui_state = config.get("ui", {}) if isinstance(config, dict) else {}
+    savepoint = ui_state.get("savepoint", {}) if isinstance(ui_state, dict) else {}
+    if not isinstance(savepoint, dict):
+        return "configured"
+    return str(savepoint.get("last_completed_step") or "configured")
 
 
 def _current_saved_config() -> dict[str, object]:
@@ -635,8 +764,7 @@ def _materialize_saved_run(
     config["qc"] = qc_settings or config.get("qc", {}) or {}
     config.setdefault("r", {"executable": "Rscript"})
 
-    with (run_dir / "pipeline.yaml").open("w", encoding="utf-8") as handle:
-        yaml.safe_dump(config, handle, sort_keys=False)
+    _write_saved_config(run_dir / "pipeline.yaml", config)
 
 
 def st_session_get(key: str, default=None):
@@ -1340,8 +1468,12 @@ def _materialize_run(
         "r": {"executable": "Rscript"},
     }
 
-    with (run_dir / "pipeline.yaml").open("w", encoding="utf-8") as handle:
-        yaml.safe_dump(config, handle, sort_keys=False)
+    existing_config = _read_saved_config(run_dir)
+    existing_ui = existing_config.get("ui") if isinstance(existing_config, dict) else None
+    if isinstance(existing_ui, dict):
+        config["ui"] = existing_ui
+
+    _write_saved_config(run_dir / "pipeline.yaml", config)
 
 
 def _write_processed_counts_outputs(counts: pd.DataFrame, metadata: pd.DataFrame, results_dir: Path) -> None:
@@ -1432,6 +1564,7 @@ def _execute_steps(config_path: Path, steps: list[str]) -> None:
                 st.error(f"Error in step `{step}`: {exc}")
                 break
             else:
+                _record_analysis_savepoint(config_path, step)
                 status.update(label=f"{step} completed", state="complete")
 
 
@@ -1593,6 +1726,7 @@ def _render_selected_comparison_samples(results_dir: Path, summary_row: pd.Serie
     import streamlit as st
 
     metadata = _read_results_metadata(results_dir)
+    analysis_samples = _read_analysis_sample_columns(results_dir)
     settings = _read_analysis_settings(results_dir)
     group_col = settings.get("group_column")
     if (
@@ -1608,8 +1742,11 @@ def _render_selected_comparison_samples(results_dir: Path, summary_row: pd.Serie
     reference_group = str(summary_row["reference_group"])
     case_group = str(summary_row["case_group"])
     recap = metadata.copy()
+    recap["sample_id"] = recap["sample_id"].astype(str)
     recap[group_col] = recap[group_col].astype(str)
     recap = recap[recap[group_col].isin([reference_group, case_group])].copy()
+    if analysis_samples:
+        recap = recap[recap["sample_id"].isin(analysis_samples)].copy()
     if recap.empty:
         return
 
@@ -2027,6 +2164,15 @@ def _read_results_metadata(results_dir: Path) -> pd.DataFrame:
     if metadata_path.exists():
         return pd.read_csv(metadata_path)
     return pd.DataFrame(columns=["sample_id"])
+
+
+def _read_analysis_sample_columns(results_dir: Path) -> list[str]:
+    for file_name in ["counts_normalized.csv", "counts_filtered.csv"]:
+        matrix_path = results_dir / file_name
+        if matrix_path.exists():
+            matrix = pd.read_csv(matrix_path, nrows=0)
+            return [col for col in matrix.columns if col not in {"CodeClass", "Name"}]
+    return []
 
 
 def _read_analysis_settings(results_dir: Path) -> dict[str, object]:
