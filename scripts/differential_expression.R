@@ -17,6 +17,15 @@ opt <- parse_cli_args()
 cfg <- read_pipeline_config(opt$config)
 
 results_dir <- cfg$outputs$results_dir
+stale_result_files <- list.files(
+  results_dir,
+  pattern = "^differential_expression(__.*)?\\.csv$|^comparison_summary\\.csv$",
+  full.names = TRUE
+)
+if (length(stale_result_files) > 0) {
+  unlink(stale_result_files)
+}
+
 metadata_path <- if (file.exists(file.path(results_dir, "metadata.csv"))) {
   file.path(results_dir, "metadata.csv")
 } else {
@@ -84,8 +93,23 @@ for (contrast_config in contrasts) {
   reference_group <- contrast_config$reference_group
   case_group <- contrast_config$case_group
 
-  if (!reference_group %in% colnames(design) || !case_group %in% colnames(design)) {
-    warning("Skipping contrast with missing groups: ", comparison_id)
+  reference_samples <- metadata %>%
+    dplyr::filter(.data[[group_col]] == reference_group) %>%
+    dplyr::pull(sample_id)
+  case_samples <- metadata %>%
+    dplyr::filter(.data[[group_col]] == case_group) %>%
+    dplyr::pull(sample_id)
+
+  if (length(reference_samples) == 0 || length(case_samples) == 0) {
+    warning(
+      "Skipping contrast with missing samples: ",
+      comparison_id,
+      " (reference n=",
+      length(reference_samples),
+      ", case n=",
+      length(case_samples),
+      ")"
+    )
     next
   }
 
@@ -110,12 +134,6 @@ for (contrast_config in contrasts) {
   }
 
   significant <- de %>% dplyr::filter(adj.P.Val <= 0.05)
-  reference_samples <- metadata %>%
-    dplyr::filter(.data[[group_col]] == reference_group) %>%
-    dplyr::pull(sample_id)
-  case_samples <- metadata %>%
-    dplyr::filter(.data[[group_col]] == case_group) %>%
-    dplyr::pull(sample_id)
   summary_rows[[length(summary_rows) + 1]] <- tibble::tibble(
     comparison_id = comparison_id,
     reference_group = reference_group,

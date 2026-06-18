@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pandas as pd
 import pytest
 import yaml
 
@@ -7,7 +8,10 @@ from easy_ncounter.ui import (
     _delete_saved_analysis,
     _last_completed_step,
     _record_analysis_savepoint,
+    _read_results_metadata,
     _saved_analysis_label,
+    _selected_de_group_info,
+    _write_saved_config,
 )
 
 
@@ -80,3 +84,77 @@ def test_saved_analysis_label_uses_savepoint_status(tmp_path: Path) -> None:
     _record_analysis_savepoint(config_path, "differential")
 
     assert "statistical comparison" in _saved_analysis_label(run_dir)
+
+
+def test_write_saved_config_quotes_yaml_scalars_that_r_reads_as_boolean(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipeline.yaml"
+
+    _write_saved_config(
+        config_path,
+        {
+            "analysis": {
+                "group_column": "RESPONDER",
+                "reference_group": "R",
+                "case_group": "N",
+                "contrasts": [
+                    {"comparison_id": "N_vs_R", "reference_group": "R", "case_group": "N"}
+                ],
+            }
+        },
+    )
+
+    text = config_path.read_text(encoding="utf-8")
+    assert "case_group: 'N'" in text
+    assert "reference_group: R" in text
+
+
+def test_results_metadata_rebuilds_composite_analysis_group_for_interactive_plots(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "ui_runs" / "analysis_1"
+    results_dir = run_dir / "results"
+    results_dir.mkdir(parents=True)
+    (results_dir / "metadata.csv").write_text(
+        "\n".join(
+            [
+                "sample_id,RESPONDER,TIME,condition",
+                "s1,R,T12,ignored",
+                "s2,N,T12,ignored",
+                "s3,R,T0,ignored",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _write_saved_config(
+        run_dir / "pipeline.yaml",
+        {
+            "analysis": {
+                "group_column": "__group__RESPONDER__TIME",
+                "group_columns": ["RESPONDER", "TIME"],
+                "reference_group": "RESPONDER=R | TIME=T12",
+                "case_group": "RESPONDER=N | TIME=T12",
+            }
+        },
+    )
+    de = yaml.safe_load(
+        """
+        - reference_group: RESPONDER=R | TIME=T12
+          case_group: RESPONDER=N | TIME=T12
+        """
+    )
+
+    metadata = _read_results_metadata(results_dir)
+    group_col, groups = _selected_de_group_info(
+        pd.DataFrame(de),
+        metadata,
+        results_dir,
+    )
+
+    assert "__group__RESPONDER__TIME" in metadata.columns
+    assert metadata["__group__RESPONDER__TIME"].tolist() == [
+        "RESPONDER=R | TIME=T12",
+        "RESPONDER=N | TIME=T12",
+        "RESPONDER=R | TIME=T0",
+    ]
+    assert group_col == "__group__RESPONDER__TIME"
+    assert groups == ["RESPONDER=R | TIME=T12", "RESPONDER=N | TIME=T12"]

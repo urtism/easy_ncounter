@@ -191,7 +191,7 @@ new file set is uploaded.
 `Data visualization` page:
 
 - differential results;
-- `adj.P.Val` and `logFC` filters;
+- selectable `adj.P.Val` or `P.Value` filter plus `logFC` filter;
 - autocomplete gene search from filtered genes or all analyzed genes, including
   non-significant genes;
 - interactive plots with volcano, gene search, and expression profile in one

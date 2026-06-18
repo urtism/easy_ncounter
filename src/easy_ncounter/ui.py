@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 import math
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,10 @@ STEP_LABELS = {
     "differential": "statistical comparison",
     "report": "report and plots",
 }
+YAML_AMBIGUOUS_SCALAR_RE = re.compile(
+    r"^(?:|~|null|true|false|yes|no|on|off|y|n|na|nan|\.nan|[-+]?\.inf)$",
+    re.IGNORECASE,
+)
 
 
 def main() -> None:
@@ -342,7 +347,19 @@ def _read_saved_config(run_dir: Path) -> dict[str, object]:
 
 def _write_saved_config(config_path: Path, config: dict[str, object]) -> None:
     with config_path.open("w", encoding="utf-8") as handle:
-        yaml.safe_dump(config, handle, sort_keys=False)
+        yaml.dump(config, handle, Dumper=_QuotedStringDumper, sort_keys=False)
+
+
+class _QuotedStringDumper(yaml.SafeDumper):
+    pass
+
+
+def _represent_config_string(dumper: yaml.SafeDumper, value: str):
+    style = "'" if YAML_AMBIGUOUS_SCALAR_RE.match(value.strip()) else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style=style)
+
+
+_QuotedStringDumper.add_representer(str, _represent_config_string)
 
 
 def _record_analysis_savepoint(config_path: Path, step: str) -> None:
@@ -1606,16 +1623,22 @@ def _render_results_explorer(results_dir: Path, reports_dir: Path) -> None:
         st.caption(f"Selected contrast: {comparison_label}")
     de = _prepare_de_table(de)
 
-    threshold_cols = st.columns([1, 1, 1])
-    max_adj_p = threshold_cols[0].slider(
-        "adj.P.Val threshold",
+    threshold_cols = st.columns([1, 1, 1, 1])
+    p_value_metric = threshold_cols[0].radio(
+        "P-value metric",
+        ["adj.P.Val", "P.Value"],
+        horizontal=True,
+        key="selected_p_value_metric",
+    )
+    max_p_value = threshold_cols[1].slider(
+        f"{p_value_metric} threshold",
         0.0,
         1.0,
         0.05,
         0.01,
-        key="selected_adj_p_threshold",
+        key="selected_p_value_threshold",
     )
-    min_abs_logfc = threshold_cols[1].slider(
+    min_abs_logfc = threshold_cols[2].slider(
         "|logFC| threshold",
         0.0,
         5.0,
@@ -1623,7 +1646,7 @@ def _render_results_explorer(results_dir: Path, reports_dir: Path) -> None:
         0.1,
         key="selected_logfc_threshold",
     )
-    max_heatmap_genes = threshold_cols[2].number_input(
+    max_heatmap_genes = threshold_cols[3].number_input(
         "Max heatmap genes",
         min_value=5,
         max_value=500,
@@ -1631,9 +1654,14 @@ def _render_results_explorer(results_dir: Path, reports_dir: Path) -> None:
         step=5,
     )
 
-    selected = _filter_de_table(de, max_adj_p=max_adj_p, min_abs_logfc=min_abs_logfc)
+    selected = _filter_de_table(
+        de,
+        p_value_metric=p_value_metric,
+        max_p_value=max_p_value,
+        min_abs_logfc=min_abs_logfc,
+    )
     st.caption(f"Analyzed genes: {len(de):,} | Genes above current thresholds: {len(selected):,}")
-    _render_interactive_volcano(de, norm_path, results_dir, max_adj_p, min_abs_logfc)
+    _render_interactive_volcano(de, norm_path, results_dir, p_value_metric, max_p_value, min_abs_logfc)
     _render_gene_search_panel(de, selected, norm_path, results_dir)
     _render_selected_gene_plots(selected, norm_path, results_dir, max_heatmap_genes)
 
@@ -1802,8 +1830,14 @@ def _prepare_de_table(de: pd.DataFrame) -> pd.DataFrame:
     return output
 
 
-def _filter_de_table(de: pd.DataFrame, max_adj_p: float, min_abs_logfc: float) -> pd.DataFrame:
-    return de[(de["adj.P.Val"] <= max_adj_p) & (de["logFC"].abs() >= min_abs_logfc)].copy()
+def _filter_de_table(
+    de: pd.DataFrame,
+    p_value_metric: str,
+    max_p_value: float,
+    min_abs_logfc: float,
+) -> pd.DataFrame:
+    metric = p_value_metric if p_value_metric in de else "adj.P.Val"
+    return de[(de[metric] <= max_p_value) & (de["logFC"].abs() >= min_abs_logfc)].copy()
 
 
 def _render_gene_search_panel(
@@ -1863,27 +1897,30 @@ def _render_interactive_volcano(
     de: pd.DataFrame,
     norm_path: Path,
     results_dir: Path,
-    max_adj_p: float,
+    p_value_metric: str,
+    max_p_value: float,
     min_abs_logfc: float,
 ) -> None:
     import plotly.express as px
     import streamlit as st
 
-    required = {"Name", "logFC", "adj.P.Val"}
+    required = {"Name", "logFC", "adj.P.Val", "P.Value"}
     if not required.issubset(de.columns):
         return
 
+    metric = p_value_metric if p_value_metric in de else "adj.P.Val"
+    metric_label = "adjusted p-value" if metric == "adj.P.Val" else "nominal p-value"
     volcano = de.copy()
-    volcano["neg_log10_adj_p"] = -volcano["adj.P.Val"].clip(lower=1e-300).map(math.log10)
+    volcano["neg_log10_p_metric"] = -volcano[metric].clip(lower=1e-300).map(math.log10)
     volcano["adj_p_label"] = volcano["adj.P.Val"].map(lambda value: f"{value:.3g}")
     volcano["p_label"] = volcano["P.Value"].map(lambda value: f"{value:.3g}")
     volcano["regulation"] = "not_significant"
     volcano.loc[
-        (volcano["adj.P.Val"] <= max_adj_p) & (volcano["logFC"] >= min_abs_logfc),
+        (volcano[metric] <= max_p_value) & (volcano["logFC"] >= min_abs_logfc),
         "regulation",
     ] = "up"
     volcano.loc[
-        (volcano["adj.P.Val"] <= max_adj_p) & (volcano["logFC"] <= -min_abs_logfc),
+        (volcano[metric] <= max_p_value) & (volcano["logFC"] <= -min_abs_logfc),
         "regulation",
     ] = "down"
     active_gene = st.session_state.get("active_gene")
@@ -1891,7 +1928,7 @@ def _render_interactive_volcano(
     fig = px.scatter(
         volcano,
         x="logFC",
-        y="neg_log10_adj_p",
+        y="neg_log10_p_metric",
         color="regulation",
         color_discrete_map={
             "up": "#B23A48",
@@ -1906,7 +1943,7 @@ def _render_interactive_volcano(
             "p_label": True,
             "adj.P.Val": False,
             "P.Value": False,
-            "neg_log10_adj_p": False,
+            "neg_log10_p_metric": False,
             "regulation": False,
         },
     )
@@ -1915,20 +1952,20 @@ def _render_interactive_volcano(
         hovertemplate=(
             "<b>%{customdata[0]}</b><br>"
             "logFC: %{x:.3f}<br>"
-            "-log10 adj.P.Val: %{y:.3f}<br>"
+            f"-log10 {metric}: %{{y:.3f}}<br>"
             "adj.P.Val: %{customdata[1]}<br>"
             "P.Value: %{customdata[2]}<extra></extra>"
         ),
     )
     fig.add_vline(x=-min_abs_logfc, line_width=1, line_dash="dash", line_color="#666666")
     fig.add_vline(x=min_abs_logfc, line_width=1, line_dash="dash", line_color="#666666")
-    fig.add_hline(y=-math.log10(max(max_adj_p, 1e-300)), line_width=1, line_dash="dash", line_color="#666666")
+    fig.add_hline(y=-math.log10(max(max_p_value, 1e-300)), line_width=1, line_dash="dash", line_color="#666666")
     if active_gene:
         active_row = volcano[volcano["Name"].astype(str).eq(str(active_gene))]
         if not active_row.empty:
             fig.add_scatter(
                 x=active_row["logFC"],
-                y=active_row["neg_log10_adj_p"],
+                y=active_row["neg_log10_p_metric"],
                 mode="markers",
                 marker={
                     "size": 16,
@@ -1941,7 +1978,7 @@ def _render_interactive_volcano(
                 hovertemplate=(
                     "<b>%{customdata[0]}</b><br>"
                     "logFC: %{x:.3f}<br>"
-                    "-log10 adj.P.Val: %{y:.3f}<br>"
+                    f"-log10 {metric}: %{{y:.3f}}<br>"
                     "adj.P.Val: %{customdata[1]}<br>"
                     "P.Value: %{customdata[2]}<extra></extra>"
                 ),
@@ -1952,7 +1989,7 @@ def _render_interactive_volcano(
         margin={"l": 45, "r": 20, "t": 18, "b": 45},
         legend_title_text="",
         xaxis_title="log2 fold change",
-        yaxis_title="-log10 adjusted p-value",
+        yaxis_title=f"-log10 {metric_label}",
     )
 
     st.subheader("Interactive plots")
@@ -2162,7 +2199,9 @@ def _selected_de_group_info(
 def _read_results_metadata(results_dir: Path) -> pd.DataFrame:
     metadata_path = results_dir / "metadata.csv"
     if metadata_path.exists():
-        return pd.read_csv(metadata_path)
+        metadata = pd.read_csv(metadata_path)
+        settings = _read_analysis_settings(results_dir)
+        return _add_composite_group_column(metadata, settings)
     return pd.DataFrame(columns=["sample_id"])
 
 

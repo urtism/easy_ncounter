@@ -70,7 +70,7 @@ add_analysis_group_column <- function(metadata, cfg) {
   if (length(missing_columns) > 0) {
     stop("Missing metadata columns for analysis groups: ", paste(missing_columns, collapse = ", "))
   }
-  if (length(group_columns) > 1 && !group_col %in% colnames(metadata)) {
+  if (length(group_columns) > 1) {
     metadata[[group_col]] <- apply(
       metadata[, group_columns, drop = FALSE],
       1,

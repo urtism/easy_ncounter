@@ -398,22 +398,34 @@ Why this default:
 
 ## Visualization Thresholds
 
-### `adj.P.Val` Threshold
+### P-value Metric and Threshold
 
-UI default: `0.05`
+UI default metric: `adj.P.Val`
+
+UI default threshold: `0.05`
 
 Filters genes displayed as significant in the volcano plot, dynamic heatmap, and
-dynamic PCA.
+dynamic PCA. The UI can apply the threshold either to:
+
+- `adj.P.Val`, the multiple-testing-adjusted p-value;
+- `P.Value`, the nominal p-value.
 
 Effect on results:
 
 - does not rerun statistics;
 - changes only which genes are highlighted and used in dynamic plots.
 
-Why this default:
+Why `adj.P.Val` is the default:
 
 - it is a common standard for FDR-controlled results;
 - it is consistent with multiple-testing correction.
+
+Why `P.Value` can be useful:
+
+- it helps exploratory review when fold changes are large but adjusted p-values
+  are not significant;
+- it should be interpreted cautiously because it does not control the false
+  discovery rate across all tested genes.
 
 ### `|logFC|` Threshold
 
