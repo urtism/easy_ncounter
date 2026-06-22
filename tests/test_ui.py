@@ -9,6 +9,7 @@ from easy_ncounter.ui import (
     _last_completed_step,
     _record_analysis_savepoint,
     _read_results_metadata,
+    _saved_analysis_int,
     _saved_analysis_label,
     _selected_de_group_info,
     _write_saved_config,
@@ -106,6 +107,16 @@ def test_write_saved_config_quotes_yaml_scalars_that_r_reads_as_boolean(tmp_path
     text = config_path.read_text(encoding="utf-8")
     assert "case_group: 'N'" in text
     assert "reference_group: R" in text
+
+
+def test_saved_analysis_int_uses_saved_gene_filter_values() -> None:
+    saved_analysis = {"min_count": "1", "min_samples": 1, "top_variable_genes": 25}
+
+    assert _saved_analysis_int(saved_analysis, "min_count", 10, minimum=0) == 1
+    assert _saved_analysis_int(saved_analysis, "min_samples", 2, minimum=1) == 1
+    assert _saved_analysis_int(saved_analysis, "top_variable_genes", 50, minimum=5) == 25
+    assert _saved_analysis_int(saved_analysis, "missing", 10, minimum=0) == 10
+    assert _saved_analysis_int({"min_samples": 0}, "min_samples", 2, minimum=1) == 2
 
 
 def test_results_metadata_rebuilds_composite_analysis_group_for_interactive_plots(

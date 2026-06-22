@@ -77,7 +77,8 @@ de_path <- file.path(results_dir, "differential_expression.csv")
 if (file.exists(de_path)) {
   de <- readr::read_csv(de_path, show_col_types = FALSE) %>%
     dplyr::mutate(
-      neg_log10_adj_p = -log10(pmax(adj.P.Val, .Machine$double.xmin)),
+      plot_adj_p = dplyr::if_else(is.na(adj.P.Val), 1, adj.P.Val),
+      neg_log10_adj_p = -log10(pmax(plot_adj_p, .Machine$double.xmin)),
       regulation = dplyr::case_when(
         adj.P.Val <= 0.05 & logFC >= 1 ~ "up",
         adj.P.Val <= 0.05 & logFC <= -1 ~ "down",

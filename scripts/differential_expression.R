@@ -71,10 +71,6 @@ metadata <- metadata %>%
   dplyr::filter(.data[[group_col]] %in% contrast_groups)
 matrix <- matrix[, metadata$sample_id, drop = FALSE]
 
-if (!requireNamespace("limma", quietly = TRUE)) {
-  stop("Package 'limma' is required for differential expression.")
-}
-
 metadata[[group_col]] <- factor(metadata[[group_col]], levels = contrast_groups)
 if (nrow(metadata) != ncol(matrix)) {
   stop("Sample metadata and count matrix are not aligned after filtering groups.")
@@ -84,7 +80,18 @@ if (length(unique(metadata[[group_col]])) < 2) {
 }
 design <- model.matrix(~ 0 + metadata[[group_col]])
 colnames(design) <- levels(metadata[[group_col]])
-fit <- limma::lmFit(log2(matrix + 1), design)
+no_residual_df <- nrow(metadata) <= ncol(design)
+if (no_residual_df) {
+  message(
+    "No residual degrees of freedom are available. ",
+    "Writing descriptive logFC tables with P.Value and adj.P.Val set to NA."
+  )
+} else {
+  if (!requireNamespace("limma", quietly = TRUE)) {
+    stop("Package 'limma' is required for differential expression.")
+  }
+  fit <- limma::lmFit(log2(matrix + 1), design)
+}
 
 summary_rows <- list()
 first_result <- TRUE
@@ -113,18 +120,40 @@ for (contrast_config in contrasts) {
     next
   }
 
-  contrast <- matrix(0, nrow = ncol(design), ncol = 1, dimnames = list(colnames(design), comparison_id))
-  contrast[case_group, 1] <- 1
-  contrast[reference_group, 1] <- -1
-  fit2 <- limma::eBayes(limma::contrasts.fit(fit, contrast))
-  de <- limma::topTable(fit2, number = Inf, sort.by = "P") %>%
-    tibble::rownames_to_column("Name") %>%
-    dplyr::mutate(
-      comparison_id = comparison_id,
-      reference_group = reference_group,
-      case_group = case_group,
-      .before = 1
-    )
+  if (no_residual_df) {
+    contrast_samples <- c(reference_samples, case_samples)
+    log_reference <- rowMeans(log2(matrix[, reference_samples, drop = FALSE] + 1), na.rm = TRUE)
+    log_case <- rowMeans(log2(matrix[, case_samples, drop = FALSE] + 1), na.rm = TRUE)
+    de <- tibble::tibble(
+      Name = rownames(matrix),
+      logFC = log_case - log_reference,
+      AveExpr = rowMeans(log2(matrix[, contrast_samples, drop = FALSE] + 1), na.rm = TRUE),
+      t = NA_real_,
+      P.Value = NA_real_,
+      adj.P.Val = NA_real_,
+      B = NA_real_
+    ) %>%
+      dplyr::arrange(dplyr::desc(abs(logFC))) %>%
+      dplyr::mutate(
+        comparison_id = comparison_id,
+        reference_group = reference_group,
+        case_group = case_group,
+        .before = 1
+      )
+  } else {
+    contrast <- matrix(0, nrow = ncol(design), ncol = 1, dimnames = list(colnames(design), comparison_id))
+    contrast[case_group, 1] <- 1
+    contrast[reference_group, 1] <- -1
+    fit2 <- limma::eBayes(limma::contrasts.fit(fit, contrast))
+    de <- limma::topTable(fit2, number = Inf, sort.by = "P") %>%
+      tibble::rownames_to_column("Name") %>%
+      dplyr::mutate(
+        comparison_id = comparison_id,
+        reference_group = reference_group,
+        case_group = case_group,
+        .before = 1
+      )
+  }
 
   result_file <- paste0("differential_expression__", comparison_id, ".csv")
   readr::write_csv(de, file.path(results_dir, result_file))

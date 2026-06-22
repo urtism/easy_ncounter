@@ -355,6 +355,25 @@ Recommended choice:
 - when several subgroups exist, compare like-with-like where possible, such as
   disease versus control within each timepoint.
 
+### One-sample vs One-sample Comparisons
+
+When a contrast contains only one sample in the reference group and one sample in
+the case group, the pipeline cannot estimate residual variance for statistical
+testing. In that situation it writes a descriptive differential table with
+`logFC` and average expression, but `P.Value` and `adj.P.Val` are set to missing
+values.
+
+Effect on results:
+
+- fold changes can still be inspected;
+- no statistical significance can be assigned;
+- volcano plots should be interpreted as descriptive effect-size views only.
+
+Why:
+
+- p-values require an estimate of within-group variability;
+- a 1 vs 1 comparison has no replicate information to estimate that variability.
+
 ### Analysis Min Count and Min Samples
 
 Defaults: `min_count = 10`, `min_samples = 2`

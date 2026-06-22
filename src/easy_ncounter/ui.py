@@ -1125,9 +1125,24 @@ def _render_analysis_settings(metadata: pd.DataFrame) -> dict[str, object]:
 
     st.subheader("Analysis parameters")
     col_a, col_b, col_c = st.columns(3)
-    min_count = col_a.number_input("Min count", min_value=0, value=10, step=1)
-    min_samples = col_b.number_input("Min samples", min_value=1, value=2, step=1)
-    top_variable = col_c.number_input("Top variable genes", min_value=5, value=50, step=5)
+    min_count = col_a.number_input(
+        "Min count",
+        min_value=0,
+        value=_saved_analysis_int(saved_analysis, "min_count", 10, minimum=0),
+        step=1,
+    )
+    min_samples = col_b.number_input(
+        "Min samples",
+        min_value=1,
+        value=_saved_analysis_int(saved_analysis, "min_samples", 2, minimum=1),
+        step=1,
+    )
+    top_variable = col_c.number_input(
+        "Top variable genes",
+        min_value=5,
+        value=_saved_analysis_int(saved_analysis, "top_variable_genes", 50, minimum=5),
+        step=5,
+    )
 
     normalization = saved_config.get("normalization", {})
     saved_method = normalization.get("method") if isinstance(normalization, dict) else None
@@ -1146,6 +1161,20 @@ def _render_analysis_settings(metadata: pd.DataFrame) -> dict[str, object]:
         "top_variable_genes": int(top_variable),
         "normalization_method": method,
     }
+
+
+def _saved_analysis_int(
+    saved_analysis: dict[str, object],
+    key: str,
+    default: int,
+    minimum: int,
+) -> int:
+    value = saved_analysis.get(key)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= minimum else default
 
 
 def _metadata_group_counts(metadata: pd.DataFrame, group_columns: list[str]) -> pd.DataFrame:
