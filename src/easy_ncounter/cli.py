@@ -6,6 +6,7 @@ from pathlib import Path
 from .config import load_config
 from .io import (
     metadata_from_samplesheet,
+    parse_probe_annotation,
     read_counts,
     read_counts_from_samplesheet,
     read_delimited_table,
@@ -63,11 +64,36 @@ def prepare(config) -> None:
         config.raw.get("qc", {}),
     )
     probe_annotation = counts[["CodeClass", "Name"]].drop_duplicates()
+    parsed_annotation = parse_probe_annotation(
+        counts,
+        config.raw.get("inputs", {}).get("probe_annotation"),
+    )
 
     counts.to_csv(config.results_dir / "counts_raw.csv", index=False)
     metadata.to_csv(config.results_dir / "metadata.csv", index=False)
     probe_annotation.to_csv(config.results_dir / "probe_annotation.csv", index=False)
+    parsed_annotation.to_csv(config.results_dir / "probe_annotation_parsed.csv", index=False)
     qc_summary.to_csv(config.results_dir / "qc_summary.csv", index=False)
+    sample_qc_columns = [
+        col
+        for col in [
+            "sample_id",
+            "qc_mode",
+            "qc_status",
+            "hk_geomean",
+            "hk_geomean_flag",
+            "positive_control_linearity",
+            "positive_control_linearity_flag",
+            "fov_registration_rate",
+            "fov_registration_flag",
+            "binding_density",
+            "binding_density_flag",
+            "exclusion_status",
+            "exclusion_reason",
+        ]
+        if col in qc_summary.columns
+    ]
+    qc_summary[sample_qc_columns].to_csv(config.results_dir / "sample_qc.csv", index=False)
     qc_summary[["sample_id", "qc_status", "qc_warnings", "qc_fail_reasons"]].to_csv(
         config.results_dir / "sample_qc_decisions.csv", index=False
     )
@@ -77,7 +103,9 @@ def prepare(config) -> None:
     print(f"Wrote {config.results_dir / 'counts_raw.csv'}")
     print(f"Wrote {config.results_dir / 'metadata.csv'}")
     print(f"Wrote {config.results_dir / 'probe_annotation.csv'}")
+    print(f"Wrote {config.results_dir / 'probe_annotation_parsed.csv'}")
     print(f"Wrote {config.results_dir / 'qc_summary.csv'}")
+    print(f"Wrote {config.results_dir / 'sample_qc.csv'}")
     print(f"Wrote {config.results_dir / 'counts_background_corrected.csv'}")
     print(f"Wrote {config.results_dir / 'counts_filtered.csv'}")
 

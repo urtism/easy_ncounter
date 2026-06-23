@@ -15,7 +15,7 @@ import yaml
 
 from easy_ncounter.cli import prepare as prepare_pipeline
 from easy_ncounter.config import load_config
-from easy_ncounter.io import metadata_from_samplesheet, read_count_table, read_rcc_file
+from easy_ncounter.io import metadata_from_samplesheet, parse_probe_annotation, read_count_table, read_rcc_file
 from easy_ncounter.runners import run_r_script
 
 
@@ -624,7 +624,11 @@ def _render_processing_settings(metadata: pd.DataFrame) -> dict[str, object]:
     reference_group = groups[0] if groups else ""
     case_group = groups[1] if len(groups) > 1 else reference_group
 
-    method = st.selectbox("Normalization", ["nanostringnorm", "library_size"], key="processing_norm")
+    method = st.selectbox(
+        "Normalization",
+        ["nanostringnorm", "library_size", "hk_geomean_all", "hk_geomean_geNorm"],
+        key="processing_norm",
+    )
     top_variable = st.number_input("Top variable genes for report", min_value=5, value=50, step=5)
 
     return {
@@ -643,6 +647,7 @@ def _render_qc_settings() -> dict[str, object]:
     import streamlit as st
 
     st.subheader("QC parameters")
+    qc_mode = st.selectbox("QC mode", ["easy_strict", "bruker_like"], key="qc_mode")
     col_a, col_b, col_c = st.columns(3)
     low_library = col_a.slider("Minimum library vs median", 0.0, 1.0, 0.5, 0.05)
     low_detected = col_b.slider("Minimum detected probes vs median", 0.0, 1.0, 0.5, 0.05)
@@ -658,8 +663,14 @@ def _render_qc_settings() -> dict[str, object]:
         fail_detected = st.slider("FAIL detected probes vs median", 0.0, 1.0, 0.25, 0.05)
         filter_min_count = st.number_input("Gene filter: minimum count", 0, 1000, 10, 1)
         filter_min_samples = st.number_input("Gene filter: minimum samples", 1, 1000, 2, 1)
+        strict_exclusion = st.checkbox(
+            "Strict exclusion in Bruker-like mode",
+            value=False,
+            help="When disabled, Bruker-like FOV, binding-density, and positive-control findings remain informative warnings.",
+        )
 
     qc_settings = {
+        "qc_mode": qc_mode,
         "low_library_fraction": float(low_library),
         "low_detected_fraction": float(low_detected),
         "low_positive_fraction": float(low_positive),
@@ -672,6 +683,7 @@ def _render_qc_settings() -> dict[str, object]:
         "fail_detected_fraction": float(fail_detected),
         "filter_min_count": int(filter_min_count),
         "filter_min_samples": int(filter_min_samples),
+        "strict_exclusion": bool(strict_exclusion),
     }
     st.session_state["qc_settings"] = qc_settings
     return qc_settings
@@ -1146,7 +1158,7 @@ def _render_analysis_settings(metadata: pd.DataFrame) -> dict[str, object]:
 
     normalization = saved_config.get("normalization", {})
     saved_method = normalization.get("method") if isinstance(normalization, dict) else None
-    methods = ["nanostringnorm", "library_size"]
+    methods = ["nanostringnorm", "library_size", "hk_geomean_all", "hk_geomean_geNorm"]
     method_index = methods.index(str(saved_method)) if saved_method in methods else 0
     method = st.selectbox("Normalization", methods, index=method_index)
 
@@ -1536,11 +1548,23 @@ def _write_processed_counts_outputs(counts: pd.DataFrame, metadata: pd.DataFrame
             "positive_control_sum": np.nan,
             "negative_control_mean": np.nan,
             "qc_status": "PREPROCESSED",
+            "qc_mode": "preprocessed",
+            "hk_geomean": np.nan,
+            "hk_geomean_flag": "SKIPPED",
+            "positive_control_linearity": np.nan,
+            "positive_control_linearity_flag": "SKIPPED",
+            "fov_registration_rate": np.nan,
+            "fov_registration_flag": "SKIPPED",
+            "binding_density": np.nan,
+            "binding_density_flag": "SKIPPED",
+            "exclusion_status": "INCLUDED",
+            "exclusion_reason": "",
             "qc_warnings": "Final counts loaded: technical QC was not recalculated",
             "qc_fail_reasons": "",
         }
     )
     probe_annotation = numeric_counts[["CodeClass", "Name"]].drop_duplicates()
+    parsed_annotation = parse_probe_annotation(numeric_counts)
     filter_decisions = numeric_counts[["CodeClass", "Name"]].copy()
     filter_decisions["filter_status"] = "PREPROCESSED"
     filter_decisions["filter_reason"] = "Final counts loaded"
@@ -1551,7 +1575,25 @@ def _write_processed_counts_outputs(counts: pd.DataFrame, metadata: pd.DataFrame
     numeric_counts.to_csv(results_dir / "counts_normalized.csv", index=False)
     metadata.to_csv(results_dir / "metadata.csv", index=False)
     probe_annotation.to_csv(results_dir / "probe_annotation.csv", index=False)
+    parsed_annotation.to_csv(results_dir / "probe_annotation_parsed.csv", index=False)
     qc_summary.to_csv(results_dir / "qc_summary.csv", index=False)
+    qc_summary[
+        [
+            "sample_id",
+            "qc_mode",
+            "qc_status",
+            "hk_geomean",
+            "hk_geomean_flag",
+            "positive_control_linearity",
+            "positive_control_linearity_flag",
+            "fov_registration_rate",
+            "fov_registration_flag",
+            "binding_density",
+            "binding_density_flag",
+            "exclusion_status",
+            "exclusion_reason",
+        ]
+    ].to_csv(results_dir / "sample_qc.csv", index=False)
     qc_summary[["sample_id", "qc_status", "qc_warnings", "qc_fail_reasons"]].to_csv(
         results_dir / "sample_qc_decisions.csv",
         index=False,

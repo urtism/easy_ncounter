@@ -3,6 +3,7 @@ from pathlib import Path
 from easy_ncounter.cli import _add_analysis_group_column
 from easy_ncounter.io import (
     metadata_from_samplesheet,
+    parse_probe_annotation,
     read_count_table,
     read_counts_from_samplesheet,
     read_rcc_file,
@@ -20,6 +21,29 @@ def test_read_count_table_adds_code_class(tmp_path: Path) -> None:
 
     assert list(table.columns) == ["CodeClass", "Name", "sample_01", "sample_02"]
     assert table.loc[0, "CodeClass"] == "Endogenous"
+
+
+def test_parse_probe_annotation_standardizes_optional_columns(tmp_path: Path) -> None:
+    counts = read_count_table(Path("data/raw/counts.csv"))
+    annotation = tmp_path / "probes.csv"
+    annotation.write_text(
+        "\n".join(
+            [
+                "Name,CodeClass,Pathway,cell type,Related Probe",
+                "ACTB,Housekeeping,Core,Stromal,ACTB_2",
+                "GENE1,Endogenous,Inflammation,T cell,",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    parsed = parse_probe_annotation(counts, annotation)
+
+    actb = parsed.loc[parsed["probe_id"] == "ACTB"].iloc[0]
+    assert bool(actb["is_housekeeper"])
+    assert actb["pathway"] == "Core"
+    assert actb["cell_type"] == "Stromal"
+    assert "raw_annotation_columns" in parsed.columns
 
 
 def test_add_analysis_group_column_combines_multiple_metadata_features() -> None:
@@ -204,6 +228,28 @@ def test_qc_summary_adds_status_and_warnings() -> None:
     assert "qc_status" in summary.columns
     assert "background_threshold" in summary.columns
     assert set(summary["qc_status"]).issubset({"PASS", "WARN"})
+
+
+def test_bruker_like_qc_summary_adds_expected_columns() -> None:
+    table = read_count_table(Path("data/raw/counts.csv"))
+
+    summary = compute_qc_summary(table, {"qc_mode": "bruker_like"})
+
+    for column in [
+        "qc_mode",
+        "hk_geomean",
+        "hk_geomean_flag",
+        "positive_control_linearity",
+        "positive_control_linearity_flag",
+        "fov_registration_rate",
+        "fov_registration_flag",
+        "binding_density",
+        "binding_density_flag",
+        "exclusion_status",
+        "exclusion_reason",
+    ]:
+        assert column in summary.columns
+    assert set(summary["qc_mode"]) == {"bruker_like"}
 
 
 def test_background_correction_and_gene_filtering() -> None:

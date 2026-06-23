@@ -30,6 +30,12 @@ normalization:
   housekeeping_norm: geometric_mean
   background_correction: mean_2sd
   housekeeping_genes: []
+  geNorm_min_housekeepers: 2
+  geNorm_max_housekeepers:
+
+qc:
+  qc_mode: easy_strict
+  strict_exclusion: false
 
 r:
   executable: Rscript

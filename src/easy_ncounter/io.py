@@ -28,10 +28,130 @@ def read_count_table(path: str | Path) -> pd.DataFrame:
     return table
 
 
+def parse_probe_annotation(
+    counts: pd.DataFrame,
+    annotation_path: str | Path | None = None,
+) -> pd.DataFrame:
+    """Return a standardized probe annotation table without requiring rich inputs."""
+    base = counts[["CodeClass", "Name"]].drop_duplicates().rename(columns={"Name": "probe_id"})
+    raw_annotation = _read_optional_annotation(annotation_path)
+    if raw_annotation is not None and not raw_annotation.empty:
+        parsed_raw = _standardize_annotation_frame(raw_annotation)
+        base = base.merge(parsed_raw, on="probe_id", how="left", suffixes=("", "_annotation"))
+
+    code_class = base.get("code_class")
+    if code_class is None:
+        code_class = base.get("CodeClass", pd.Series(["Endogenous"] * len(base), index=base.index))
+
+    output = pd.DataFrame(
+        {
+            "probe_id": base["probe_id"].astype(str),
+            "gene_name": _first_present(
+                base,
+                ["gene_name", "Name", "gene_name_annotation", "target_name", "probe_id"],
+            ),
+            "code_class": code_class.fillna(base.get("CodeClass", "Endogenous")).astype(str),
+            "pathway": _first_present(base, ["pathway", "pathway_annotation"]),
+            "cell_type": _first_present(base, ["cell_type", "cell_type_annotation"]),
+            "related_probe": _first_present(base, ["related_probe"]),
+            "raw_annotation_columns": _first_present(base, ["raw_annotation_columns"]),
+        }
+    )
+    class_norm = output["code_class"].astype(str).str.lower()
+    output["is_housekeeper"] = class_norm.str.contains("housekeep|housekeeping|reference", regex=True)
+    output["is_positive_control"] = class_norm.str.contains("positive|pos", regex=True)
+    output["is_negative_control"] = class_norm.str.contains("negative|neg", regex=True)
+
+    for source, target in [
+        ("is_housekeeper", "is_housekeeper"),
+        ("is_positive_control", "is_positive_control"),
+        ("is_negative_control", "is_negative_control"),
+    ]:
+        if source in base.columns:
+            output[target] = output[target] | base[source].map(_truthy_annotation_value).fillna(False)
+
+    output["is_endogenous"] = ~(output["is_positive_control"] | output["is_negative_control"])
+    output = output[
+        [
+            "probe_id",
+            "gene_name",
+            "code_class",
+            "is_endogenous",
+            "is_housekeeper",
+            "is_positive_control",
+            "is_negative_control",
+            "pathway",
+            "cell_type",
+            "related_probe",
+            "raw_annotation_columns",
+        ]
+    ]
+    return output
+
+
 def read_delimited_table(path: str | Path) -> pd.DataFrame:
     path = Path(path)
     sep = "\t" if path.suffix.lower() in {".tsv", ".txt"} else ","
     return pd.read_csv(path, sep=sep)
+
+
+def _read_optional_annotation(path: str | Path | None) -> pd.DataFrame | None:
+    if not path:
+        return None
+    path = Path(path)
+    if not path.exists() or path.is_dir():
+        return None
+    try:
+        return read_delimited_table(path)
+    except Exception:
+        return None
+
+
+def _standardize_annotation_frame(table: pd.DataFrame) -> pd.DataFrame:
+    normalized = {_normalize_annotation_key(col): col for col in table.columns}
+    aliases = {
+        "probe_id": ("probe_id", "probeid", "name", "gene", "gene_name", "genename", "target", "target_name", "targetname"),
+        "gene_name": ("gene_name", "genename", "target_name", "targetname", "target", "symbol", "name"),
+        "code_class": ("codeclass", "code_class", "class", "code_class_name"),
+        "is_housekeeper": ("is_housekeeper", "housekeeper", "housekeeping", "hk", "reference_gene"),
+        "is_positive_control": ("is_positive_control", "positive_control", "positivecontrol", "pos_control"),
+        "is_negative_control": ("is_negative_control", "negative_control", "negativecontrol", "neg_control"),
+        "pathway": ("pathway", "pathways", "pathway_name", "module", "annotation_pathway"),
+        "cell_type": ("cell_type", "celltype", "cell_type_marker", "immune_cell_type", "marker_cell_type"),
+        "related_probe": ("related_probe", "relatedprobe", "related_probes", "related"),
+    }
+    output = pd.DataFrame(index=table.index)
+    for target, names in aliases.items():
+        source = next((normalized[name] for name in names if name in normalized), None)
+        if source is not None:
+            output[target] = table[source]
+
+    if "probe_id" not in output.columns:
+        first = table.columns[0]
+        output["probe_id"] = table[first]
+    if "gene_name" not in output.columns:
+        output["gene_name"] = output["probe_id"]
+    output["raw_annotation_columns"] = ";".join(map(str, table.columns))
+    output["probe_id"] = output["probe_id"].astype(str)
+    return output.drop_duplicates(subset=["probe_id"], keep="first")
+
+
+def _normalize_annotation_key(value: object) -> str:
+    return str(value).strip().lower().replace(" ", "_").replace(".", "_").replace("-", "_")
+
+
+def _first_present(table: pd.DataFrame, columns: list[str]) -> pd.Series:
+    result = pd.Series([pd.NA] * len(table), index=table.index, dtype="object")
+    for column in columns:
+        if column in table.columns:
+            result = result.fillna(table[column])
+    return result
+
+
+def _truthy_annotation_value(value: object) -> bool:
+    if pd.isna(value):
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "housekeeping", "positive", "negative"}
 
 
 def read_samplesheet(path: str | Path) -> pd.DataFrame:

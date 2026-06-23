@@ -7,6 +7,11 @@ The goal of the workflow is to make NanoString nCounter gene expression analysis
 traceable and reproducible. Every major transformation writes an intermediate
 file, so users can inspect how the final statistics were obtained.
 
+Easy_nCounter is not a ROSALIND clone and is not official Bruker/NanoString
+software. It is an independent local workflow partially aligned with nCounter
+analysis principles, with optional Bruker-like QC summaries and ROSALIND-like
+exploratory outputs.
+
 ## 1. Input Selection
 
 `easy-ncounter` supports multiple entry points because NanoString data can arrive
@@ -72,6 +77,8 @@ Why this is done:
 Main output:
 
 - `counts_raw.csv`.
+- `probe_annotation.csv`;
+- `probe_annotation_parsed.csv`.
 
 ## 4. Sample-Level Technical QC
 
@@ -99,7 +106,9 @@ Why this is done:
 
 Main outputs:
 
+- `qc_summary.csv`;
 - `sample_qc.csv`;
+- `sample_qc_decisions.csv`;
 - QC summaries and plots in the report folder.
 
 ## 5. Background Estimation and Correction
@@ -155,7 +164,9 @@ usually `counts_filtered.csv` after background correction and filtering.
 
 When `NanoStringNorm` is available and selected, the pipeline uses
 NanoString-specific normalization. If it is not available, the pipeline falls
-back to library-size scaling.
+back to library-size scaling. Optional housekeeping modes can normalize by all
+housekeeping probes (`hk_geomean_all`) or by a geNorm-like stable housekeeping
+subset (`hk_geomean_geNorm`).
 
 Why this is done:
 
@@ -168,6 +179,8 @@ Why this is done:
 Main output:
 
 - `counts_normalized.csv`.
+- `normalization_audit.csv`;
+- `selected_housekeepers.csv` when housekeeping normalization is used.
 
 ## 8. Special Handling for Final Processed Counts
 
@@ -216,13 +229,32 @@ Interpretation:
 - positive `logFC`: higher expression in the case group;
 - negative `logFC`: higher expression in the reference group;
 - `P.Value`: nominal p-value;
-- `adj.P.Val`: multiple-testing-adjusted p-value.
+- `adj.P.Val`: Benjamini-Hochberg FDR-adjusted p-value.
 
 Main output:
 
 - `differential_expression.csv`.
 
-## 10. Static Report Generation
+## 10. Optional Marker Score Modules
+
+When parsed probe annotation contains pathway or cell-type marker columns, the
+reporting step calculates simple marker scores from normalized counts. Scores
+are means of `log2(normalized count + 1)` across probes assigned to each pathway
+or marker cell type. Z-scored versions are written for heatmap visualization.
+
+Cell type scores are marker-expression scores only. They are not cell abundance
+deconvolution.
+
+Main outputs:
+
+- `pathway_scores.csv`;
+- `pathway_scores_z.csv`;
+- `pathway_heatmap.png`;
+- `cell_type_scores.csv`;
+- `cell_type_scores_z.csv`;
+- `cell_type_heatmap.png`.
+
+## 11. Static Report Generation
 
 The reporting step creates standard QC and analysis figures, including library
 size summaries, PCA, heatmap, and volcano plot. These plots are saved as image
@@ -239,10 +271,14 @@ Main outputs:
 
 - `qc_library_size.png`;
 - `pca.png`;
+- `mds_plot.png`;
+- `sample_correlation_heatmap.png`;
+- count-distribution and control/QC plots when required inputs exist;
 - `heatmap_top_variable.png`;
 - `volcano_plot.png`.
+- `single_probe_plots/`.
 
-## 11. Interactive Results Exploration
+## 12. Interactive Results Exploration
 
 The browser UI provides an interactive results page. Users can filter genes by
 adjusted p-value and absolute log fold-change, search for any analyzed gene,
@@ -271,7 +307,7 @@ Main outputs:
 - interactive plots in the Streamlit UI;
 - downloadable result tables and generated files.
 
-## 12. Result Interpretation
+## 13. Result Interpretation
 
 The final interpretation should combine technical QC, normalization behavior,
 statistical output, and biological context.
@@ -292,7 +328,7 @@ Why this is done:
 - a biologically important gene may be non-significant in small experiments;
 - looking at raw expression patterns prevents overinterpreting a single p-value.
 
-## 13. Important Notes
+## 14. Important Notes
 
 Different tools can produce different results from the same experiment because
 they may use different background correction, normalization, filtering,

@@ -22,6 +22,12 @@ The project is not a replacement for `nf-core/nanostring` or NACHO yet, but it
 is aligned with that style of workflow: traceable inputs, explicit QC,
 controlled normalization, documented filtering, and saved intermediate outputs.
 
+`easy-ncounter` is not a ROSALIND clone and is not official Bruker/NanoString
+software. It provides a transparent local workflow for NanoString nCounter
+differential expression analysis. Optional modules provide Bruker-like QC
+summaries, housekeeping selection, pathway marker scoring, and cell type marker
+scoring for traceable exploratory analysis.
+
 For a step-by-step explanation of the analysis workflow and why each stage is
 performed, see [docs/analysis_workflow.md](docs/analysis_workflow.md).
 
@@ -43,7 +49,8 @@ Rscript scripts/install_r_deps.R
 
 The R installer creates a project-local `r-lib/` folder. `NanoStringNorm` and
 `limma` are recommended. If `NanoStringNorm` is not available, normalization
-falls back to library-size scaling.
+falls back to library-size scaling. Optional housekeeping geomean modes are also
+available.
 
 ## Supported Inputs
 
@@ -165,6 +172,7 @@ new file set is uploaded.
 
 `Advanced QC options`:
 
+- QC mode: `easy_strict` or `bruker_like`;
 - background: `mean(negative controls) + N * sd(negative controls)`;
 - negative-control threshold: median + `N * MAD`;
 - minimum counted FOV;
@@ -203,6 +211,8 @@ new file set is uploaded.
 - normalized expression profiles for one gene or all threshold-selected genes;
 - expression boxplots for the two comparison groups;
 - static PCA, volcano, and heatmap images;
+- optional MDS, sample correlation, count distribution, housekeeper, positive
+  control, pathway-score, cell-type marker-score, and single-probe plots;
 - table downloads.
 
 ## Technical QC
@@ -239,6 +249,11 @@ For each sample:
 - `background_threshold`;
 - `endogenous_above_background`.
 
+`bruker_like` QC adds Bruker-inspired summary fields including housekeeper
+geomean, positive-control linearity, FOV registration, and binding density. In
+this mode, samples are not aggressively excluded unless strict exclusion is
+enabled.
+
 ### QC Decision
 
 Each sample receives:
@@ -263,6 +278,14 @@ Example warnings/failures:
 
 Samples marked as `FAIL` are excluded from the filtered counts used for
 normalization and statistical analysis.
+
+## Differential Results
+
+Differential expression is run with `limma`. `P.Value` is the nominal p-value.
+`adj.P.Val` is explicitly computed with Benjamini-Hochberg FDR correction and
+keeps the standard `limma` column name. Positive `logFC` means higher expression
+in the case group; negative `logFC` means higher expression in the reference
+group.
 
 ## Background, Filtering, and Normalization
 

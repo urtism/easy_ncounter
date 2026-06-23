@@ -145,7 +145,7 @@ for (contrast_config in contrasts) {
     contrast[case_group, 1] <- 1
     contrast[reference_group, 1] <- -1
     fit2 <- limma::eBayes(limma::contrasts.fit(fit, contrast))
-    de <- limma::topTable(fit2, number = Inf, sort.by = "P") %>%
+    de <- limma::topTable(fit2, number = Inf, sort.by = "P", adjust.method = "BH") %>%
       tibble::rownames_to_column("Name") %>%
       dplyr::mutate(
         comparison_id = comparison_id,

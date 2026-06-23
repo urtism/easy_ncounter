@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 
@@ -17,6 +19,10 @@ DEFAULT_QC_PARAMS = {
     "filter_min_count": 10,
     "filter_min_samples": 2,
     "filter_min_group_samples": 1,
+    "qc_mode": "easy_strict",
+    "bruker_hk_geomean_min": 100.0,
+    "positive_control_linearity_min": 0.95,
+    "strict_exclusion": False,
 }
 
 
@@ -31,6 +37,7 @@ def compute_qc_summary(
     positive_mask = code_class.eq("positive")
     negative_mask = code_class.eq("negative")
     endogenous_mask = code_class.eq("endogenous")
+    housekeeper_mask = code_class.str.contains("housekeep|housekeeping|reference", regex=True)
     summaries = []
 
     for sample in sample_cols:
@@ -38,6 +45,7 @@ def compute_qc_summary(
         positive_values = values[positive_mask]
         negative_values = values[negative_mask]
         endogenous_values = values[endogenous_mask]
+        housekeeper_values = values[housekeeper_mask]
         negative_mean = _safe_mean(negative_values)
         negative_sd = _safe_sd(negative_values)
         background_threshold = negative_mean + (
@@ -52,10 +60,15 @@ def compute_qc_summary(
                 "detected_endogenous_probes": int((endogenous_values > 0).sum()),
                 "positive_control_sum": int(positive_values.sum()),
                 "positive_control_cv": _safe_cv(positive_values),
+                "positive_control_linearity": _positive_control_linearity(
+                    positive_values,
+                    counts.loc[positive_mask, "Name"] if positive_mask.any() else pd.Series(dtype=str),
+                ),
                 "negative_control_mean": negative_mean,
                 "negative_control_sd": negative_sd,
                 "background_threshold": background_threshold,
                 "endogenous_above_background": int((endogenous_values > background_threshold).sum()),
+                "hk_geomean": _geometric_mean(housekeeper_values),
             }
         )
 
@@ -70,7 +83,11 @@ def add_qc_flags(summary: pd.DataFrame, params: dict | None = None) -> pd.DataFr
         return summary.assign(qc_warnings="", qc_status="")
 
     qc_params = {**DEFAULT_QC_PARAMS, **(params or {})}
+    qc_mode = str(qc_params.get("qc_mode", "easy_strict"))
     flagged = summary.copy()
+    if qc_mode == "bruker_like":
+        return _add_bruker_like_qc_flags(flagged, qc_params)
+
     med_library = flagged["library_size"].median()
     med_detected = flagged["detected_endogenous_probes"].median()
     med_positive = flagged["positive_control_sum"].median()
@@ -123,7 +140,7 @@ def add_qc_flags(summary: pd.DataFrame, params: dict | None = None) -> pd.DataFr
         "FAIL" if failure_items else ("WARN" if warning_items else "PASS")
         for warning_items, failure_items in zip(warnings, failures)
     ]
-    return flagged
+    return _add_common_qc_output_columns(flagged, qc_mode="easy_strict")
 
 
 def background_correct_counts(counts: pd.DataFrame, qc_summary: pd.DataFrame) -> pd.DataFrame:
@@ -148,7 +165,8 @@ def filter_endogenous_counts(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     qc_params = {**DEFAULT_QC_PARAMS, **(params or {})}
     sample_cols = [col for col in counts.columns if col not in {"CodeClass", "Name"}]
-    passing_samples = qc_summary.loc[qc_summary["qc_status"].ne("FAIL"), "sample_id"].tolist()
+    status_column = "exclusion_status" if "exclusion_status" in qc_summary.columns else "qc_status"
+    passing_samples = qc_summary.loc[qc_summary[status_column].ne("FAIL"), "sample_id"].tolist()
     usable_samples = [sample for sample in sample_cols if sample in passing_samples]
 
     code_class = counts["CodeClass"].astype(str).str.lower()
@@ -198,6 +216,82 @@ def _safe_cv(values: pd.Series) -> float:
     if mean == 0:
         return 0.0
     return float(_safe_sd(values) / mean)
+
+
+def _add_bruker_like_qc_flags(flagged: pd.DataFrame, qc_params: dict) -> pd.DataFrame:
+    output = flagged.copy()
+    warnings = []
+    failures = []
+    for _, row in output.iterrows():
+        sample_warnings = []
+        sample_failures = []
+        hk_geomean = row.get("hk_geomean")
+        if pd.notna(hk_geomean) and float(hk_geomean) < float(qc_params["bruker_hk_geomean_min"]):
+            sample_warnings.append("low_housekeeper_geomean")
+            if bool(qc_params.get("strict_exclusion")):
+                sample_failures.append("low_housekeeper_geomean")
+        fov = row.get("fov_counted_fraction")
+        if pd.notna(fov) and float(fov) < float(qc_params["min_fov_counted_fraction"]):
+            sample_warnings.append("low_fov_registration_rate")
+        binding = row.get("bindingdensity")
+        if pd.notna(binding):
+            if float(binding) < float(qc_params["binding_density_min"]):
+                sample_warnings.append("low_binding_density")
+            if float(binding) > float(qc_params["binding_density_max"]):
+                sample_warnings.append("high_binding_density")
+        linearity = row.get("positive_control_linearity")
+        if pd.notna(linearity) and float(linearity) < float(qc_params["positive_control_linearity_min"]):
+            sample_warnings.append("low_positive_control_linearity")
+        warnings.append(sample_warnings)
+        failures.append(sample_failures)
+
+    output["qc_warnings"] = [";".join(items) for items in warnings]
+    output["qc_fail_reasons"] = [";".join(items) for items in failures]
+    output["qc_status"] = [
+        "FAIL" if failure_items else ("WARN" if warning_items else "PASS")
+        for warning_items, failure_items in zip(warnings, failures)
+    ]
+    return _add_common_qc_output_columns(output, qc_mode="bruker_like")
+
+
+def _add_common_qc_output_columns(flagged: pd.DataFrame, qc_mode: str) -> pd.DataFrame:
+    output = flagged.copy()
+    warning_text = output["qc_warnings"].astype(str) if "qc_warnings" in output else pd.Series([""] * len(output))
+    output["qc_mode"] = qc_mode
+    output["hk_geomean_flag"] = warning_text.str.contains("housekeeper").map(
+        lambda value: "WARN" if value else "PASS"
+    )
+    output["positive_control_linearity_flag"] = warning_text.str.contains(
+        "positive_control_linearity"
+    ).map(lambda value: "WARN" if value else "PASS")
+    output["fov_registration_rate"] = output.get("fov_counted_fraction", pd.Series([pd.NA] * len(output)))
+    output["fov_registration_flag"] = warning_text.str.contains("fov").map(
+        lambda value: "WARN" if value else "PASS"
+    )
+    output["binding_density"] = output.get("bindingdensity", pd.Series([pd.NA] * len(output)))
+    output["binding_density_flag"] = warning_text.str.contains("binding_density").map(
+        lambda value: "WARN" if value else "PASS"
+    )
+    output["exclusion_status"] = output["qc_status"].where(output["qc_status"].eq("FAIL"), "INCLUDED")
+    output["exclusion_reason"] = output.get("qc_fail_reasons", "")
+    return output
+
+
+def _geometric_mean(values: pd.Series) -> float:
+    positive = pd.to_numeric(values, errors="coerce").dropna()
+    positive = positive[positive > 0]
+    if len(positive) == 0:
+        return 0.0
+    return float(math.exp(positive.apply(math.log).mean()))
+
+
+def _positive_control_linearity(values: pd.Series, names: pd.Series) -> float | None:
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    if len(numeric) < 3 or numeric.nunique() < 2:
+        return None
+    ranks = pd.Series(range(len(numeric), 0, -1), index=numeric.index, dtype=float)
+    corr = numeric.rank().corr(ranks, method="spearman")
+    return float(corr) if pd.notna(corr) else None
 
 
 def _median_plus_mad(values: pd.Series, multiplier: float) -> float:

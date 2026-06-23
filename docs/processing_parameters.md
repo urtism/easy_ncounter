@@ -30,6 +30,21 @@ that the gene set uploaded from the external software is preserved.
 
 ## Sample QC Parameters
 
+### QC Mode
+
+Default: `easy_strict`
+
+Allowed values:
+
+- `easy_strict`: current PASS/WARN/FAIL behavior, where `FAIL` samples are
+  excluded from filtered downstream analyses.
+- `bruker_like`: Bruker-inspired summaries that emphasize housekeeper geomean
+  and report FOV registration, binding density, and positive-control linearity
+  as informative metrics unless strict exclusion is enabled.
+
+`bruker_like` is designed for traceable local review. It is not an official
+Bruker/NanoString QC implementation.
+
 ### Minimum Library vs Median
 
 Default: `0.5`
@@ -289,6 +304,28 @@ Why it exists:
 - it is useful for already filtered matrices or panels without robust
   housekeeping genes.
 
+### `hk_geomean_all`
+
+Uses all probes annotated as housekeeping genes. For each sample, the pipeline
+computes the housekeeping geometric mean and scales endogenous counts to the
+median housekeeping geomean across samples.
+
+Outputs:
+
+- `selected_housekeepers.csv`;
+- `normalization_audit.csv`.
+
+### `hk_geomean_geNorm`
+
+Uses a lightweight geNorm-like stability ranking on housekeeping probes, then
+normalizes with the geometric mean of the selected stable subset. The default
+minimum selected housekeeping genes is 2. If fewer than 2 valid housekeeping
+genes are available, the method falls back to all available housekeeping genes
+and records that decision in `selected_housekeepers.csv`.
+
+This is a transparent internal stability procedure, not a full replacement for
+dedicated normalization software.
+
 ## Statistical Analysis Parameters
 
 ### Group Columns
@@ -344,6 +381,8 @@ Effect on results:
 
 - `logFC > 0` means higher expression in the case group;
 - `logFC < 0` means higher expression in the reference group.
+- `P.Value` is the nominal p-value;
+- `adj.P.Val` is computed using Benjamini-Hochberg FDR correction.
 - each contrast writes its own differential-expression table;
 - `comparison_summary.csv` summarizes sample sizes and significant genes across
   all contrasts.
@@ -416,6 +455,30 @@ Why this default:
 - it remains readable for most NanoString panels.
 
 ## Visualization Thresholds
+
+## Optional Exploratory Modules
+
+When richer probe annotation is available, `easy-ncounter` can write marker
+score tables after normalization:
+
+- `pathway_scores.csv` and `pathway_scores_z.csv` use the mean
+  `log2(normalized count + 1)` of probes assigned to each pathway.
+- `cell_type_scores.csv` and `cell_type_scores_z.csv` use the mean
+  `log2(normalized count + 1)` of probes assigned to each marker cell type.
+
+Cell type scores are marker-expression scores. They are not immune
+deconvolution and should not be interpreted as absolute cell abundances.
+
+The report may also include MDS, sample-correlation, count-distribution,
+housekeeper-geomean, positive-control, and single-probe plots when the required
+inputs exist. Missing optional annotation or control fields are skipped with a
+message rather than stopping the pipeline.
+
+Easy_nCounter provides a transparent local workflow for NanoString nCounter
+differential expression analysis. Optional Bruker-like and ROSALIND-like
+summaries are intended for traceable exploratory analysis and should not be
+interpreted as a full clone of ROSALIND or as an official Bruker/NanoString
+software implementation.
 
 ### P-value Metric and Threshold
 
