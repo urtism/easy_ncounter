@@ -93,13 +93,16 @@ normalize_analysis_contrasts <- function(contrasts) {
     reference_group <- as.character(item$reference_group %||% "")
     case_group <- as.character(item$case_group %||% "")
     comparison_id <- as.character(item$comparison_id %||% "")
+    reference_samples <- normalize_sample_list(item$reference_samples %||% character())
+    case_samples <- normalize_sample_list(item$case_samples %||% character())
     if (comparison_id == "" && reference_group != "" && case_group != "") {
       comparison_id <- paste0(case_group, "_vs_", reference_group)
     }
     if (comparison_id == "") {
       comparison_id <- paste0("comparison_", index)
     }
-    if (reference_group == "" || case_group == "" || reference_group == case_group) {
+    has_sample_groups <- length(reference_samples) > 0 && length(case_samples) > 0
+    if (!has_sample_groups && (reference_group == "" || case_group == "" || reference_group == case_group)) {
       next
     }
     safe_id <- unique_comparison_id(sanitize_comparison_id(comparison_id), used_ids)
@@ -107,10 +110,23 @@ normalize_analysis_contrasts <- function(contrasts) {
     normalized[[length(normalized) + 1]] <- list(
       comparison_id = safe_id,
       reference_group = reference_group,
-      case_group = case_group
+      case_group = case_group,
+      reference_samples = reference_samples,
+      case_samples = case_samples
     )
   }
   normalized
+}
+
+normalize_sample_list <- function(value) {
+  if (is.null(value) || length(value) == 0) {
+    return(character())
+  }
+  if (is.character(value) && length(value) == 1 && grepl(";", value, fixed = TRUE)) {
+    value <- unlist(strsplit(value, ";", fixed = TRUE), use.names = FALSE)
+  }
+  value <- trimws(as.character(unlist(value, use.names = FALSE)))
+  unique(value[value != ""])
 }
 
 unique_comparison_id <- function(value, used_ids) {

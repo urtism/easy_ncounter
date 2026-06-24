@@ -62,35 +62,8 @@ metadata <- metadata %>% dplyr::filter(sample_id %in% sample_order)
 matrix <- matrix[, metadata$sample_id, drop = FALSE]
 
 contrasts <- normalize_analysis_contrasts(configured_contrasts)
-contrast_groups <- unique(c(
-  vapply(contrasts, function(item) item$reference_group, character(1)),
-  vapply(contrasts, function(item) item$case_group, character(1))
-))
-
-metadata <- metadata %>%
-  dplyr::filter(.data[[group_col]] %in% contrast_groups)
-matrix <- matrix[, metadata$sample_id, drop = FALSE]
-
-metadata[[group_col]] <- factor(metadata[[group_col]], levels = contrast_groups)
-if (nrow(metadata) != ncol(matrix)) {
-  stop("Sample metadata and count matrix are not aligned after filtering groups.")
-}
-if (length(unique(metadata[[group_col]])) < 2) {
-  stop("Differential expression requires at least two groups after filtering metadata.")
-}
-design <- model.matrix(~ 0 + metadata[[group_col]])
-colnames(design) <- levels(metadata[[group_col]])
-no_residual_df <- nrow(metadata) <= ncol(design)
-if (no_residual_df) {
-  message(
-    "No residual degrees of freedom are available. ",
-    "Writing descriptive logFC tables with P.Value and adj.P.Val set to NA."
-  )
-} else {
-  if (!requireNamespace("limma", quietly = TRUE)) {
-    stop("Package 'limma' is required for differential expression.")
-  }
-  fit <- limma::lmFit(log2(matrix + 1), design)
+if (length(contrasts) == 0) {
+  stop("No valid differential-expression contrast is configured.")
 }
 
 summary_rows <- list()
@@ -99,13 +72,37 @@ for (contrast_config in contrasts) {
   comparison_id <- sanitize_comparison_id(contrast_config$comparison_id)
   reference_group <- contrast_config$reference_group
   case_group <- contrast_config$case_group
+  explicit_reference_samples <- intersect(contrast_config$reference_samples, colnames(matrix))
+  explicit_case_samples <- intersect(contrast_config$case_samples, colnames(matrix))
+  has_explicit_samples <- length(explicit_reference_samples) > 0 && length(explicit_case_samples) > 0
 
-  reference_samples <- metadata %>%
-    dplyr::filter(.data[[group_col]] == reference_group) %>%
-    dplyr::pull(sample_id)
-  case_samples <- metadata %>%
-    dplyr::filter(.data[[group_col]] == case_group) %>%
-    dplyr::pull(sample_id)
+  if (has_explicit_samples) {
+    overlap <- intersect(explicit_reference_samples, explicit_case_samples)
+    if (length(overlap) > 0) {
+      warning("Skipping contrast with samples in both reference and case: ", comparison_id)
+      next
+    }
+    reference_samples <- explicit_reference_samples
+    case_samples <- explicit_case_samples
+    contrast_metadata <- metadata %>%
+      dplyr::filter(sample_id %in% c(reference_samples, case_samples)) %>%
+      dplyr::mutate(.contrast_group = dplyr::case_when(
+        sample_id %in% reference_samples ~ reference_group,
+        sample_id %in% case_samples ~ case_group,
+        TRUE ~ NA_character_
+      ))
+    contrast_group_col <- ".contrast_group"
+  } else {
+    contrast_metadata <- metadata %>%
+      dplyr::filter(.data[[group_col]] %in% c(reference_group, case_group))
+    reference_samples <- contrast_metadata %>%
+      dplyr::filter(.data[[group_col]] == reference_group) %>%
+      dplyr::pull(sample_id)
+    case_samples <- contrast_metadata %>%
+      dplyr::filter(.data[[group_col]] == case_group) %>%
+      dplyr::pull(sample_id)
+    contrast_group_col <- group_col
+  }
 
   if (length(reference_samples) == 0 || length(case_samples) == 0) {
     warning(
@@ -120,14 +117,43 @@ for (contrast_config in contrasts) {
     next
   }
 
+  contrast_sample_order <- c(reference_samples, case_samples)
+  contrast_metadata <- contrast_metadata %>%
+    dplyr::filter(sample_id %in% contrast_sample_order) %>%
+    dplyr::mutate(.sample_order = match(sample_id, contrast_sample_order)) %>%
+    dplyr::arrange(.sample_order)
+  contrast_matrix <- matrix[, contrast_metadata$sample_id, drop = FALSE]
+  contrast_metadata[[contrast_group_col]] <- factor(
+    contrast_metadata[[contrast_group_col]],
+    levels = c(reference_group, case_group)
+  )
+  if (nrow(contrast_metadata) != ncol(contrast_matrix)) {
+    stop("Sample metadata and count matrix are not aligned after filtering contrast samples.")
+  }
+  design <- model.matrix(~ 0 + contrast_metadata[[contrast_group_col]])
+  colnames(design) <- levels(contrast_metadata[[contrast_group_col]])
+  no_residual_df <- nrow(contrast_metadata) <= ncol(design)
+  if (no_residual_df) {
+    message(
+      "No residual degrees of freedom are available for ",
+      comparison_id,
+      ". Writing descriptive logFC tables with P.Value and adj.P.Val set to NA."
+    )
+  } else {
+    if (!requireNamespace("limma", quietly = TRUE)) {
+      stop("Package 'limma' is required for differential expression.")
+    }
+    fit <- limma::lmFit(log2(contrast_matrix + 1), design)
+  }
+
   if (no_residual_df) {
     contrast_samples <- c(reference_samples, case_samples)
-    log_reference <- rowMeans(log2(matrix[, reference_samples, drop = FALSE] + 1), na.rm = TRUE)
-    log_case <- rowMeans(log2(matrix[, case_samples, drop = FALSE] + 1), na.rm = TRUE)
+    log_reference <- rowMeans(log2(contrast_matrix[, reference_samples, drop = FALSE] + 1), na.rm = TRUE)
+    log_case <- rowMeans(log2(contrast_matrix[, case_samples, drop = FALSE] + 1), na.rm = TRUE)
     de <- tibble::tibble(
-      Name = rownames(matrix),
+      Name = rownames(contrast_matrix),
       logFC = log_case - log_reference,
-      AveExpr = rowMeans(log2(matrix[, contrast_samples, drop = FALSE] + 1), na.rm = TRUE),
+      AveExpr = rowMeans(log2(contrast_matrix[, contrast_samples, drop = FALSE] + 1), na.rm = TRUE),
       t = NA_real_,
       P.Value = NA_real_,
       adj.P.Val = NA_real_,

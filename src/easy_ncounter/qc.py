@@ -290,8 +290,22 @@ def _positive_control_linearity(values: pd.Series, names: pd.Series) -> float | 
     if len(numeric) < 3 or numeric.nunique() < 2:
         return None
     ranks = pd.Series(range(len(numeric), 0, -1), index=numeric.index, dtype=float)
-    corr = numeric.rank().corr(ranks, method="spearman")
+    corr = _pearson_correlation(numeric.rank(), ranks)
     return float(corr) if pd.notna(corr) else None
+
+
+def _pearson_correlation(left: pd.Series, right: pd.Series) -> float | None:
+    aligned = pd.concat([left, right], axis=1).dropna()
+    if len(aligned) < 2:
+        return None
+    left_values = aligned.iloc[:, 0].astype(float)
+    right_values = aligned.iloc[:, 1].astype(float)
+    left_centered = left_values - left_values.mean()
+    right_centered = right_values - right_values.mean()
+    denominator = math.sqrt(float((left_centered**2).sum() * (right_centered**2).sum()))
+    if denominator == 0:
+        return None
+    return float((left_centered * right_centered).sum() / denominator)
 
 
 def _median_plus_mad(values: pd.Series, multiplier: float) -> float:

@@ -87,6 +87,8 @@ def test_valid_contrasts_filters_invalid_and_duplicates() -> None:
             "comparison_id": "treated_vs_control",
             "reference_group": "control",
             "case_group": "treated",
+            "reference_samples": [],
+            "case_samples": [],
         }
     ]
 
@@ -250,6 +252,22 @@ def test_bruker_like_qc_summary_adds_expected_columns() -> None:
     ]:
         assert column in summary.columns
     assert set(summary["qc_mode"]) == {"bruker_like"}
+
+
+def test_positive_control_linearity_does_not_require_scipy() -> None:
+    import pandas as pd
+
+    table = pd.DataFrame(
+        {
+            "CodeClass": ["Positive", "Positive", "Positive", "Negative", "Endogenous"],
+            "Name": ["POS_A", "POS_B", "POS_C", "NEG_A", "GENE1"],
+            "sample_01": [300, 200, 100, 1, 50],
+        }
+    )
+
+    summary = compute_qc_summary(table, {"qc_mode": "bruker_like"})
+
+    assert summary.loc[0, "positive_control_linearity"] == 1.0
 
 
 def test_background_correction_and_gene_filtering() -> None:
